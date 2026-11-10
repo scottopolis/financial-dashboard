@@ -1,4 +1,6 @@
+import { useState } from 'react'
 import { describe, shortDate, valueHistory, type Holding, type State } from '../model.ts'
+import type { Act } from '../api.ts'
 import { exact, money, netWorthOf, signedPct } from '../plan.ts'
 import { useWidth } from '../useWidth'
 
@@ -30,7 +32,11 @@ function ValueChart({ values }: { values: number[] }) {
   )
 }
 
-export function HoldingScreen({ holding: h, state }: { holding: Holding; state: State }) {
+export function HoldingScreen({ holding: h, state, act }: { holding: Holding; state: State; act: Act }) {
+  const [editing, setEditing] = useState(false)
+  const [draftValue, setDraftValue] = useState('')
+  const [draftApy, setDraftApy] = useState('')
+  const portfolio = state.portfolios.find((p) => p.id === h.portfolioId)
   const gain = h.value - h.costBasis
   const paid = h.distributions.reduce((s, d) => s + d.amount, 0)
   const manual = h.dayChangePct === null
@@ -43,7 +49,7 @@ export function HoldingScreen({ holding: h, state }: { holding: Holding; state: 
       </a>
       <section className="stack-xs">
         <span className="label">
-          {h.name} · {h.kind}
+          {h.name} · {portfolio?.name ?? h.kind}
         </span>
         <div className="row">
           <span className="big num">{exact(h.value)}</span>
@@ -59,7 +65,11 @@ export function HoldingScreen({ holding: h, state }: { holding: Holding; state: 
       <section className="card stack-sm">
         <ValueChart values={valueHistory(h)} />
         <p className="caption">
-          {manual ? 'Changes when Claude records a new valuation.' : 'Updated once a day from the price feed.'}
+          {!manual
+            ? 'Updated once a day from the price feed.'
+            : h.interestPct
+              ? `Grows daily at ${h.interestPct}% APY. Update the balance when you add or withdraw money.`
+              : 'Changes when you or Claude record a new value.'}
         </p>
       </section>
 
@@ -78,6 +88,12 @@ export function HoldingScreen({ holding: h, state }: { holding: Holding; state: 
           <span className="caption">Of portfolio</span>
           <span className="block num">{((h.value / netWorth) * 100).toFixed(1)}%</span>
         </div>
+        {h.interestPct ? (
+          <div>
+            <span className="caption">Interest added</span>
+            <span className="block num up">+{exact(h.interestEarned ?? 0)}</span>
+          </div>
+        ) : null}
         {paid > 0 && (
           <div>
             <span className="caption">Paid out</span>
@@ -85,6 +101,66 @@ export function HoldingScreen({ holding: h, state }: { holding: Holding; state: 
           </div>
         )}
       </section>
+
+      {manual && (
+        <section className="stack-sm">
+          <h2 className="section">{h.kind === 'Cash' ? 'Balance and interest' : 'Value'}</h2>
+          <div className="card">
+            {editing ? (
+              <form
+                className="inline-form"
+                onSubmit={async (e) => {
+                  e.preventDefault()
+                  const args: Record<string, unknown> = { id: h.id }
+                  const v = Number(draftValue.replace(/[$,]/g, ''))
+                  if (draftValue.trim() && Number.isFinite(v) && v !== Math.round(h.value)) args.value = v
+                  const r = Number(draftApy)
+                  if (draftApy.trim() !== String(h.interestPct ?? '') && Number.isFinite(r)) args.interestPct = draftApy.trim() ? r : 0
+                  if (Object.keys(args).length === 1 || (await act('update_holding', args))) setEditing(false)
+                }}
+              >
+                <label className="field grow">
+                  <span className="field-label">{h.kind === 'Cash' ? 'Balance' : 'Value'}</span>
+                  <span className="input">
+                    <span className="affix">$</span>
+                    <input inputMode="decimal" autoFocus value={draftValue} onChange={(e) => setDraftValue(e.target.value)} />
+                  </span>
+                </label>
+                <label className="field grow">
+                  <span className="field-label">Interest</span>
+                  <span className="input">
+                    <input inputMode="decimal" value={draftApy} onChange={(e) => setDraftApy(e.target.value)} placeholder="None" />
+                    <span className="affix">% APY</span>
+                  </span>
+                </label>
+                <button type="submit" className="btn primary">
+                  Save
+                </button>
+                <button type="button" className="btn" onClick={() => setEditing(false)}>
+                  Cancel
+                </button>
+              </form>
+            ) : (
+              <div className="row-between center wrap">
+                <span>
+                  {h.valuedOn ? `Last set ${shortDate(h.valuedOn)}` : 'Never set'}
+                  {h.interestPct ? `, ${h.interestPct}% APY` : ''}
+                </span>
+                <button
+                  className="btn"
+                  onClick={() => {
+                    setDraftValue(String(Math.round(h.value)))
+                    setDraftApy(h.interestPct ? String(h.interestPct) : '')
+                    setEditing(true)
+                  }}
+                >
+                  Update
+                </button>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
 
       {h.distributions.length > 0 && (
         <section className="stack-sm">
@@ -108,7 +184,7 @@ export function HoldingScreen({ holding: h, state }: { holding: Holding; state: 
       )}
 
       <p className="caption">
-        {manual ? `Ask Claude: “${h.name} is now worth $105k” or “Log a $2,250 distribution from ${h.name}.”` : `Ask Claude: “I bought 10 more ${h.symbol}.”`}
+        {manual ? (h.kind === 'Cash' ? `Or ask Claude: “My ${h.name} balance is $45,000.”` : `Or ask Claude: “${h.name} is now worth $105k” or “Log a $2,250 distribution from ${h.name}.”`) : `Ask Claude: “I bought 10 more ${h.symbol}.”`}
       </p>
     </div>
   )

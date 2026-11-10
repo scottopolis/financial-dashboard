@@ -1,11 +1,15 @@
 import { z } from 'zod'
 import {
   assetKinds,
+  isPriced,
+  kindInfo,
   formatSlider,
   planSliders,
   START_YEAR,
+  today,
   type Assumptions,
   type Holding,
+  type Portfolio,
   type SliderKey,
   type State,
 } from '../src/model.ts'
@@ -27,7 +31,6 @@ function tool<S extends z.ZodRawShape>(t: {
   return t as unknown as Tool
 }
 
-const today = () => new Date().toISOString().slice(0, 10)
 const pct = (v: number) => `${Math.round(v * 100)}%`
 
 /** Records a change for the activity feed. Repeated edits of the same thing by the same actor merge. */
@@ -41,31 +44,40 @@ function log(s: State, by: string, text: string, key?: string) {
 
 function freedomLine(a: Assumptions, netWorth: number) {
   const p = makePlan(a, netWorth, START_YEAR)
-  if (p.freeAt >= 0)
-    return `Free to stop working in ${START_YEAR + p.freeAt} (in ${p.freeAt} years, at age ${a.currentAge + p.freeAt}), spending ${exact(a.retireSpending)}/yr until age ${a.planToAge} in ${a.confidencePct}% of simulated markets.`
-  return `Not free within ${MAX_STOP} years at ${exact(a.retireSpending)}/yr. Stopping in ${START_YEAR + MAX_STOP} supports ${exact(p.spendByStop[MAX_STOP])}/yr in ${a.confidencePct}% of markets.`
+  const r = p.withdrawalPct
+  if (p.freeAt >= 0) {
+    const at = `Free to stop working in ${START_YEAR + p.freeAt} (in ${p.freeAt} years, at age ${a.currentAge + p.freeAt})`
+    if (!r) return `${at}, spending ${exact(a.retireSpending)}/yr until age ${a.planToAge} in ${a.confidencePct}% of simulated markets.`
+    return `${at}: withdrawing ${r}% of the portfolio gives at least the ${exact(a.retireSpending)}/yr target in ${a.confidencePct}% of simulated markets; typically ${exact(p.spendByStop[p.freeAt])}/yr from a ${exact(p.portfolioAtStop[p.freeAt])} portfolio. A ${r}% withdrawal lasts until age ${a.planToAge} in ${pct(p.lastsAt(p.freeAt))} of simulated markets.`
+  }
+  if (!r)
+    return `Not free within ${MAX_STOP} years at ${exact(a.retireSpending)}/yr. Stopping in ${START_YEAR + MAX_STOP} supports ${exact(p.spendByStop[MAX_STOP])}/yr in ${a.confidencePct}% of markets.`
+  return `Not free within ${MAX_STOP} years at a ${r}% withdrawal rate (needs at least ${exact(a.retireSpending)}/yr that lasts, in ${a.confidencePct}% of markets). Stopping in ${START_YEAR + MAX_STOP} gives ${exact(p.spendByStop[MAX_STOP])}/yr, which lasts in ${pct(p.lastsAt(MAX_STOP))} of markets.`
 }
 
 function planDetail(a: Assumptions, netWorth: number) {
   const p = makePlan(a, netWorth, START_YEAR)
+  const r = p.withdrawalPct
   const rows = p.spendByStop.map(
     (s, i) =>
-      `| ${START_YEAR + i} | ${a.currentAge + i} | ${exact(s)} | ${pct(p.successAt(i))} |`,
+      `| ${START_YEAR + i} | ${a.currentAge + i} | ${exact(p.portfolioAtStop[i])} | ${exact(s)} | ${pct(p.lastsAt(i))} | ${pct(p.successAt(i))} |`,
   )
   return [
     freedomLine(a, netWorth),
     '',
-    `By the year you stop working: the yearly spending that lasts in ${a.confidencePct}% of markets, and the chance ${exact(a.retireSpending)}/yr lasts.`,
+    r
+      ? `By the year you stop working: the typical (median) portfolio then, a ${r}% withdrawal of it per year, the chance that withdrawal lasts until ${a.planToAge}, and the chance ${exact(a.retireSpending)}/yr lasts.`
+      : `By the year you stop working: the typical (median) portfolio then, the yearly spending that lasts in ${a.confidencePct}% of markets (withdrawal rate is on auto), the chance it lasts, and the chance ${exact(a.retireSpending)}/yr lasts.`,
     '',
-    '| Stop in | Age | Spending that lasts | Chance target lasts |',
-    '| --- | --- | --- | --- |',
+    `| Stop in | Age | Portfolio | ${r ? `${r}% withdrawal` : 'Spending'} | Chance it lasts | Chance target lasts |`,
+    '| --- | --- | --- | --- | --- | --- |',
     ...rows,
   ].join('\n')
 }
 
 function assumptionsText(a: Assumptions) {
   return [
-    ...planSliders.map((s) => `- ${s.key}: ${formatSlider(s, a[s.key])} (${s.label}; range ${s.min}–${s.max})`),
+    ...planSliders.map((s) => `- ${s.key}: ${formatSlider(s, a[s.key])} (${s.label}; range ${s.min}–${s.max} in steps of ${s.step}${s.key === 'withdrawalPct' ? '; 0 means auto' : ''})`),
     '',
     'Big purchases (one-time costs, in today\'s dollars):',
     ...(a.purchases.length ? a.purchases.map((p) => `- ${p.id}: ${p.label}, ${exact(p.amount)} in ${p.year}`) : ['- none']),
@@ -78,14 +90,25 @@ export function overview(s: State = getState()) {
     (t, h) => t + (h.dayChangePct ? (h.value * h.dayChangePct) / (100 + h.dayChangePct) : 0),
     0,
   )
-  const alloc = assetKinds
-    .map((k) => ({ k, v: netWorthOf(s.holdings.filter((h) => h.kind === k)) }))
-    .filter((x) => x.v > 0)
-    .map((x) => `- ${x.k}: ${exact(x.v)} (${pct(x.v / net)})`)
-  const rows = s.holdings.map((h) => {
-    const detail = h.symbol ? `${h.quantity} ${h.symbol} at ${exact(h.price ?? 0)}` : `valued ${h.valuedOn ?? 'never'}`
+  const row = (h: Holding) => {
+    const detail = h.symbol
+      ? `${h.quantity} ${h.symbol} at ${exact(h.price ?? 0)}`
+      : h.interestPct
+        ? `${h.interestPct}% APY, ${exact(h.interestEarned ?? 0)} interest added since ${h.valuedOn ?? 'added'}`
+        : `valued ${h.valuedOn ?? 'never'}`
     const paid = h.distributions.reduce((t, d) => t + d.amount, 0)
-    return `| ${h.id} | ${h.name} | ${h.kind} | ${exact(h.value)} | ${exact(h.costBasis)} | ${exact(h.value - h.costBasis)} | ${h.dayChangePct === null ? 'manual' : h.dayChangePct.toFixed(2) + '%'} | ${paid ? exact(paid) : '—'} | ${detail} |`
+    return `| ${h.id} | ${h.name} | ${exact(h.value)} | ${exact(h.costBasis)} | ${exact(h.value - h.costBasis)} | ${h.dayChangePct === null ? 'manual' : h.dayChangePct.toFixed(2) + '%'} | ${paid ? exact(paid) : '—'} | ${detail} |`
+  }
+  const groups = s.portfolios.flatMap((p) => {
+    const hs = s.holdings.filter((h) => h.portfolioId === p.id)
+    const v = netWorthOf(hs)
+    return [
+      '',
+      `### ${p.name} (id ${p.id}, type ${p.kind}): ${exact(v)}, ${net ? pct(v / net) : '0%'} of net worth`,
+      ...(hs.length
+        ? ['| id | name | value | cost basis | gain | today | distributions | detail |', '| --- | --- | --- | --- | --- | --- | --- | --- |', ...hs.map(row)]
+        : ['No holdings yet.']),
+    ]
   })
   const dists = s.holdings
     .flatMap((h) => h.distributions.map((d) => ({ ...d, name: h.name })))
@@ -96,15 +119,11 @@ export function overview(s: State = getState()) {
     `# Portfolio and freedom plan, as of ${today()}`,
     '',
     `Net worth: ${exact(net)} (${todayChange >= 0 ? '+' : '−'}${exact(Math.abs(todayChange))} today).`,
-    `Stock and crypto prices from Yahoo Finance, last updated ${s.pricesUpdatedAt ? s.pricesUpdatedAt.slice(0, 16).replace('T', ' ') + ' UTC' : 'never'}. Alternatives and cash are valued manually.`,
+    `Stock and crypto prices from Yahoo Finance, last updated ${s.pricesUpdatedAt ? s.pricesUpdatedAt.slice(0, 16).replace('T', ' ') + ' UTC' : 'never'}. Alternatives and cash are valued manually; cash with an APY grows daily.`,
     '',
-    '## Allocation',
-    ...alloc,
-    '',
-    '## Holdings',
-    '| id | name | kind | value | cost basis | gain | today | distributions | detail |',
-    '| --- | --- | --- | --- | --- | --- | --- | --- | --- |',
-    ...rows,
+    '## Portfolios and holdings',
+    `Each portfolio has a type that decides how its holdings are valued: ${assetKinds.map((k) => `${k} (${kindInfo[k]})`).join('; ')}.`,
+    ...groups,
     '',
     '## Freedom plan',
     planDetail(s.assumptions, net),
@@ -135,12 +154,19 @@ const sliderShape = Object.fromEntries(
 ) as Record<SliderKey, z.ZodOptional<z.ZodNumber>>
 
 const kind = z.enum(assetKinds as [string, ...string[]])
+const interestPct = z.number().min(0).max(25).describe('Yearly interest (APY) in percent, such as 4.1. It is added to the value daily.')
 
 function slug(s: State, name: string) {
   const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'item'
   let id = base
-  for (let n = 2; s.holdings.some((h) => h.id === id) || s.assumptions.purchases.some((p) => p.id === id); n++) id = `${base}-${n}`
+  for (let n = 2; [...s.holdings, ...s.portfolios, ...s.assumptions.purchases].some((x) => x.id === id); n++) id = `${base}-${n}`
   return id
+}
+
+function findPortfolio(s: State, idOrName: string) {
+  const p = s.portfolios.find((x) => x.id === idOrName || x.name.toLowerCase() === idOrName.toLowerCase())
+  if (!p) throw new Error(`No portfolio "${idOrName}". Portfolios: ${s.portfolios.map((x) => `${x.id} (${x.kind})`).join(', ')}. Create one with add_portfolio.`)
+  return p
 }
 
 function findHolding(s: State, id: string) {
@@ -153,7 +179,7 @@ export const tools: Tool[] = [
   tool({
     name: 'get_overview',
     description:
-      'Everything in the dashboard as one Markdown report: net worth, allocation, every holding with value, cost basis, gain and distributions, the freedom plan (when you can stop working and how much you can spend), every plan assumption with its allowed range, big purchases, and recent changes. Call this first to answer any question.',
+      'Everything in the dashboard as one Markdown report: net worth, every portfolio with its holdings with value, cost basis, gain and distributions, the freedom plan (when you can stop working and how much you can spend), every plan assumption with its allowed range, big purchases, and recent changes. Call this first to answer any question.',
     input: {},
     run: () => overview(),
   }),
@@ -228,23 +254,28 @@ export const tools: Tool[] = [
   tool({
     name: 'add_holding',
     description:
-      'Add an investment. For stocks, funds, and crypto pass symbol and quantity; the current price is looked up (pass price only to override it), and it updates daily after that. For alternatives such as real estate syndications, and for cash, pass value.',
+      'Add an investment to a portfolio. In a Stocks or Crypto portfolio pass symbol and quantity; the current price is looked up (pass price only to override it), and it updates daily after that. In an Alternatives or Cash portfolio pass value, and for savings accounts interestPct.',
     input: {
+      portfolio: z.string().describe('Portfolio id or name, from get_overview.'),
       name: z.string(),
-      kind,
       symbol: z.string().optional(),
       quantity: z.number().positive().optional(),
       price: z.number().positive().optional().describe('Price per share or coin. Omit to look it up.'),
       value: z.number().min(0).optional().describe('Current value, for holdings without a price.'),
       costBasis: z.number().min(0).optional().describe('Total amount invested. Defaults to the current value.'),
+      interestPct: interestPct.optional(),
       note: z.string().optional(),
     },
     run: async (a, by) => {
-      const priced = a.symbol !== undefined
+      const portfolio = findPortfolio(getState(), a.portfolio)
+      const k = portfolio.kind
+      const priced = isPriced(k)
+      if (priced && a.symbol === undefined) throw new Error(`${portfolio.name} is a ${k} portfolio, so pass symbol and quantity.`)
+      if (!priced && a.symbol !== undefined) throw new Error(`${portfolio.name} is valued manually, so pass value instead of symbol.`)
       if (priced && a.quantity === undefined) throw new Error('A holding with a symbol needs quantity.')
       let dayChangePct = 0
       if (priced && a.price === undefined) {
-        const q = await fetchQuote(a.symbol!.toUpperCase(), a.kind as Holding['kind']).catch((e) => {
+        const q = await fetchQuote(a.symbol!.toUpperCase(), k).catch((e) => {
           throw new Error(`${e.message}. Check the symbol, or pass price.`)
         })
         a.price = q.price
@@ -252,20 +283,23 @@ export const tools: Tool[] = [
       }
       const s = getState()
       const value = priced ? a.quantity! * a.price! : a.value
-      if (value === undefined) throw new Error('Pass value, or symbol, quantity, and price.')
+      if (value === undefined) throw new Error('Pass value.')
       const h: Holding = {
         id: slug(s, a.symbol ?? a.name),
         name: a.name,
-        kind: a.kind as Holding['kind'],
+        portfolioId: portfolio.id,
+        kind: k,
         value,
         costBasis: a.costBasis ?? value,
         dayChangePct: priced ? dayChangePct : null,
         distributions: [],
-        ...(priced ? { symbol: a.symbol!.toUpperCase(), quantity: a.quantity, price: a.price } : { valuedOn: today() }),
+        ...(priced
+          ? { symbol: a.symbol!.toUpperCase(), quantity: a.quantity, price: a.price }
+          : { valuedOn: today(), ...(a.interestPct ? { interestPct: a.interestPct, accruedOn: today(), interestEarned: 0 } : {}) }),
         ...(a.note ? { note: a.note } : {}),
       }
       s.holdings.push(h)
-      log(s, by, `added ${h.name} at ${exact(h.value)}`)
+      log(s, by, `added ${h.name} to ${portfolio.name} at ${exact(h.value)}`)
       save()
       return `Added ${h.id}. Net worth is now ${exact(netWorthOf(s.holdings))}. ${freedomLine(s.assumptions, netWorthOf(s.holdings))}`
     },
@@ -273,7 +307,7 @@ export const tools: Tool[] = [
   tool({
     name: 'update_holding',
     description:
-      'Change a holding by id: record a new valuation for an alternative (value), change shares (quantity) or price for stocks and crypto, or edit name, cost basis, or note.',
+      'Change a holding by id: record a new value or balance for an alternative or cash holding (value), set its interest rate (interestPct, 0 to stop), change shares (quantity) or price for stocks and crypto, move it to another portfolio of the same type, or edit name, cost basis, or note.',
     input: {
       id: z.string(),
       name: z.string().optional(),
@@ -281,6 +315,8 @@ export const tools: Tool[] = [
       quantity: z.number().min(0).optional(),
       price: z.number().positive().optional(),
       costBasis: z.number().min(0).optional(),
+      interestPct: interestPct.optional(),
+      portfolio: z.string().optional().describe('Portfolio id or name to move it to.'),
       note: z.string().optional(),
     },
     run: ({ id, ...patch }, by) => {
@@ -290,6 +326,16 @@ export const tools: Tool[] = [
       if (patch.name !== undefined) h.name = patch.name
       if (patch.costBasis !== undefined) h.costBasis = patch.costBasis
       if (patch.note !== undefined) h.note = patch.note
+      if (patch.portfolio !== undefined) {
+        const p = findPortfolio(s, patch.portfolio)
+        if (isPriced(p.kind) !== isPriced(h.kind)) throw new Error(`Can't move ${h.name} into ${p.name}: one is priced by symbol and the other valued manually.`)
+        h.portfolioId = p.id
+        h.kind = p.kind
+      }
+      if (patch.interestPct !== undefined && !h.symbol) {
+        h.interestPct = patch.interestPct || undefined
+        h.accruedOn = today()
+      }
       if (h.symbol) {
         if (patch.quantity !== undefined) h.quantity = patch.quantity
         if (patch.price !== undefined) h.price = patch.price
@@ -297,6 +343,8 @@ export const tools: Tool[] = [
       } else if (patch.value !== undefined) {
         h.value = patch.value
         h.valuedOn = today()
+        h.accruedOn = today()
+        h.interestEarned = 0
       }
       log(s, by, h.value !== before ? `updated ${h.name} to ${exact(h.value)}` : `edited ${h.name}`, 'holding:' + h.id)
       save()
@@ -332,6 +380,47 @@ export const tools: Tool[] = [
       log(s, by, `logged a ${exact(amount)} distribution from ${h.name}`)
       save()
       return `Recorded ${exact(amount)} from ${h.name}. Total paid out: ${exact(h.distributions.reduce((t, d) => t + d.amount, 0))}.`
+    },
+  }),
+  tool({
+    name: 'add_portfolio',
+    description: `Create a portfolio to group holdings, such as "Retirement accounts" or "Real estate". Its type decides how holdings in it are valued: ${assetKinds.map((k) => `${k}: ${kindInfo[k]}`).join('; ')}.`,
+    input: { name: z.string(), kind },
+    run: ({ name, kind: k }, by) => {
+      const s = getState()
+      const p: Portfolio = { id: slug(s, name), name, kind: k as Portfolio['kind'] }
+      s.portfolios.push(p)
+      log(s, by, `created the ${name} portfolio`)
+      save()
+      return `Created portfolio ${p.id} (${p.kind}).`
+    },
+  }),
+  tool({
+    name: 'rename_portfolio',
+    description: 'Rename a portfolio.',
+    input: { id: z.string(), name: z.string() },
+    run: ({ id, name }, by) => {
+      const s = getState()
+      const p = findPortfolio(s, id)
+      log(s, by, `renamed ${p.name} to ${name}`)
+      p.name = name
+      save()
+      return `Renamed ${p.id} to ${name}.`
+    },
+  }),
+  tool({
+    name: 'remove_portfolio',
+    description: 'Remove an empty portfolio. Move or remove its holdings first.',
+    input: { id: z.string() },
+    run: ({ id }, by) => {
+      const s = getState()
+      const p = findPortfolio(s, id)
+      const n = s.holdings.filter((h) => h.portfolioId === p.id).length
+      if (n) throw new Error(`${p.name} still has ${n} holdings. Move them with update_holding or remove them first.`)
+      s.portfolios = s.portfolios.filter((x) => x !== p)
+      log(s, by, `removed the ${p.name} portfolio`)
+      save()
+      return `Removed ${p.name}.`
     },
   }),
   tool({

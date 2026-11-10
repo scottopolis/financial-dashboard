@@ -1,22 +1,19 @@
-import { useMemo, useState } from 'react'
-import { ago, assetKinds, describe, START_YEAR, type State } from '../model.ts'
-import { exact, makePlan, MAX_STOP, money, netWorthOf, signedPct } from '../plan.ts'
-import { FanChart } from '../charts/FanChart'
+import { useMemo } from 'react'
+import { ago, describe, START_YEAR, type State } from '../model.ts'
+import { exact, makePlan, money, netWorthOf, signedPct } from '../plan.ts'
+import { FreedomCard } from './FreedomCard'
 import { ChangeFeed } from './ChangeFeed'
-
-const yearsLabel = (x: number) => (x === 0 ? 'now' : x === 1 ? 'in 1 year' : `in ${x} years`)
 
 export function Home({ state }: { state: State }) {
   const { holdings, assumptions: a } = state
   const netWorth = netWorthOf(holdings)
   const plan = useMemo(() => makePlan(a, netWorth, START_YEAR), [a, netWorth])
   const today = holdings.reduce((s, h) => s + (h.dayChangePct ? (h.value * h.dayChangePct) / (100 + h.dayChangePct) : 0), 0)
-  const byKind = assetKinds
-    .map((kind) => ({ kind, value: netWorthOf(holdings.filter((h) => h.kind === kind)) }))
-    .filter((b) => b.value > 0)
-  const [picked, setStop] = useState<number | null>(null)
-  const stop = picked ?? (plan.freeAt >= 0 ? plan.freeAt : 10)
-  const spend = plan.spendByStop[stop]
+  const groups = state.portfolios.map((p, i) => {
+    const hs = holdings.filter((h) => h.portfolioId === p.id)
+    return { ...p, holdings: hs, value: netWorthOf(hs), color: `var(--series-${(i % 6) + 1})` }
+  })
+  const funded = groups.filter((g) => g.value > 0)
 
   return (
     <div className="stack-lg">
@@ -32,80 +29,71 @@ export function Home({ state }: { state: State }) {
           </div>
         </div>
         <div className="alloc">
-          {byKind.map((b) => (
-            <span key={b.kind} style={{ flex: b.value, background: `var(--kind-${b.kind})` }} />
+          {funded.map((g) => (
+            <span key={g.id} style={{ flex: g.value, background: g.color }} />
           ))}
         </div>
         <div className="legend">
-          {byKind.map((b) => (
-            <span key={b.kind}>
-              <i style={{ background: `var(--kind-${b.kind})` }} />
-              {b.kind} {Math.round((b.value / netWorth) * 100)}%
+          {funded.map((g) => (
+            <span key={g.id}>
+              <i style={{ background: g.color }} />
+              {g.name} {Math.round((g.value / netWorth) * 100)}%
             </span>
           ))}
         </div>
       </section>
 
-      <section className="card stack-md">
-        <div className="row-between">
-          <span className="label">Freedom</span>
-          <a className="link" href="#/plan">
-            Adjust plan
-          </a>
-        </div>
-        <p className="hero">
-          Stop working {yearsLabel(stop)}, in {START_YEAR + stop} at {a.currentAge + stop}, and you could spend{' '}
-          <em>{money(spend)} a year</em> for life.
-        </p>
-        <div className="stack-xs">
-          <input
-            type="range"
-            className="range"
-            min={0}
-            max={MAX_STOP}
-            value={stop}
-            onChange={(e) => setStop(Number(e.target.value))}
-            aria-label="Years until you stop working"
-            style={{ '--fill': `${(stop / MAX_STOP) * 100}%` } as React.CSSProperties}
-          />
-          <div className="row-between caption">
-            <span>Now</span>
-            <span>{MAX_STOP} years</span>
-          </div>
-        </div>
-        <FanChart bands={plan.bands(stop, spend)} stop={stop} startYear={START_YEAR} endAge={a.planToAge} />
-        <p className="caption">
-          Portfolio in today's dollars, middle half of {plan.runs} simulated markets. {money(spend)} a year lasts to{' '}
-          {a.planToAge} in {a.confidencePct}% of them.
-        </p>
-      </section>
+      <FreedomCard plan={plan} assumptions={a} link />
 
       <div className="cols">
-        <section className="stack-sm">
-          <span className="label">Holdings</span>
-          <div className="card list">
-            {holdings.map((h) => (
-              <a key={h.id} className="list-row" href={`#/holding/${h.id}`}>
-                <span className="kind-dot" style={{ background: `var(--kind-${h.kind})` }} />
-                <span className="grow">
-                  <span className="block">{h.name}</span>
-                  <span className="caption">{describe(h)}</span>
-                </span>
-                <span className="right">
-                  <span className="block num">{money(h.value)}</span>
-                  <span className={h.dayChangePct ? (h.dayChangePct > 0 ? 'caption up' : 'caption down') : 'caption'}>
-                    {h.dayChangePct === null ? 'Manual' : h.dayChangePct === 0 ? '0.0%' : signedPct(h.dayChangePct)}
-                  </span>
-                </span>
-                <span className="chev" aria-hidden="true">
-                  ›
-                </span>
-              </a>
-            ))}
+        <section className="stack-md">
+          <div className="row-between">
+            <span className="label">Portfolios</span>
+            <a className="link" href="#/add">
+              + Add
+            </a>
           </div>
+          {groups.map((g) => (
+            <div key={g.id} className="stack-sm">
+              <div className="row-between">
+                <span className="group-name">
+                  <span className="kind-dot" style={{ background: g.color }} />
+                  {g.name}
+                  {g.name !== g.kind && <span className="caption">{g.kind}</span>}
+                </span>
+                <span className="num">{money(g.value)}</span>
+              </div>
+              <div className="card list">
+                {g.holdings.length === 0 && <p className="list-row muted">No holdings yet.</p>}
+                {g.holdings.map((h) => (
+                  <a key={h.id} className="list-row" href={`#/holding/${h.id}`}>
+                    <span className="grow">
+                      <span className="block">{h.name}</span>
+                      <span className="caption">{describe(h)}</span>
+                    </span>
+                    <span className="right">
+                      <span className="block num">{money(h.value)}</span>
+                      <span className={h.dayChangePct ? (h.dayChangePct > 0 ? 'caption up' : 'caption down') : 'caption'}>
+                        {h.dayChangePct !== null
+                          ? h.dayChangePct === 0
+                            ? '0.0%'
+                            : signedPct(h.dayChangePct)
+                          : h.interestPct
+                            ? `+${exact(h.interestEarned ?? 0)} interest`
+                            : 'Manual'}
+                      </span>
+                    </span>
+                    <span className="chev" aria-hidden="true">
+                      ›
+                    </span>
+                  </a>
+                ))}
+              </div>
+            </div>
+          ))}
           <p className="caption">
-            {state.pricesUpdatedAt ? `Prices updated ${ago(state.pricesUpdatedAt)}, daily from Yahoo Finance. ` : ''}To add or
-            change holdings, ask Claude.
+            {state.pricesUpdatedAt ? `Prices updated ${ago(state.pricesUpdatedAt)}, daily from Yahoo Finance. ` : ''}Add holdings
+            here or ask Claude.
           </p>
         </section>
         <section className="stack-sm">

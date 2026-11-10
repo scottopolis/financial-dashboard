@@ -9,6 +9,8 @@ const prompts = [
   'I bought 25 shares of VOO.',
   'The Austin multifamily paid a $2,250 distribution today.',
   'Plan a $150k house down payment in 2029.',
+  'Add my Ally savings: $25,000 at 4.2% APY.',
+  'Create a Real estate portfolio and move the syndications into it.',
 ]
 
 export function AgentScreen({ state }: { state: State }) {

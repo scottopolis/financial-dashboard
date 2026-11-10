@@ -7,8 +7,9 @@ type Props = { bands: Band[]; stop: number; startYear: number; endAge: number; h
 export function FanChart({ bands, stop, startYear, endAge, height = 180 }: Props) {
   const [ref, width] = useWidth<HTMLDivElement>()
   const w = Math.max(280, width)
-  const h = height
-  const top = 12
+  const h = height + 12
+  // The stop label gets its own strip above the data so lines never run through it.
+  const top = 24
   const bottom = 22
   const left = 48
   const years = bands.length - 1
@@ -42,8 +43,8 @@ export function FanChart({ bands, stop, startYear, endAge, height = 180 }: Props
           ))}
           <path d={area} className="band" />
           <path d={line('mid')} className="median" />
-          <line x1={x(stop)} x2={x(stop)} y1={top} y2={h - bottom} className="marker" />
-          <text x={Math.min(x(stop), w - 80) + 6} y={top + 10} className="strong">
+          <line x1={x(stop)} x2={x(stop)} y1={16} y2={h - bottom} className="marker" />
+          <text x={Math.min(x(stop), w - 80) + 6} y={12} className="strong">
             Stop {startYear + stop}
           </text>
           <text x={x(0)} y={h - 4}>

@@ -26,4 +26,5 @@ export const fetchConnector = () => request<Connector>('/api/connector')
 
 export type Connector = { path: string; node: string; stdioScript: string }
 
-export type Act = (tool: string, args: object) => Promise<void>
+/** Runs a tool from the app. Resolves to false and shows the error if it failed. */
+export type Act = (tool: string, args: object) => Promise<boolean>

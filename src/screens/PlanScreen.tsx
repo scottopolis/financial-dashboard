@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { formatSlider, planSliders, START_YEAR, type Assumptions, type SliderKey, type State } from '../model.ts'
-import { exact, makePlan, MAX_STOP, money, netWorthOf } from '../plan.ts'
+import { exact, makePlan, netWorthOf } from '../plan.ts'
 import type { Act } from '../api.ts'
-import { FanChart } from '../charts/FanChart'
+import { FreedomCard } from './FreedomCard'
 
 const groups = ['Savings and income', 'Goal', 'Markets'] as const
 
@@ -18,9 +18,6 @@ export function PlanScreen({ state, act }: { state: State; act: Act }) {
   const netWorth = netWorthOf(state.holdings)
   const key = JSON.stringify(a)
   const plan = useMemo(() => makePlan(JSON.parse(key), netWorth, START_YEAR), [key, netWorth])
-  const stop = plan.freeAt >= 0 ? plan.freeAt : MAX_STOP
-  const spend = plan.freeAt >= 0 ? a.retireSpending : plan.spendByStop[MAX_STOP]
-
   const move = (key: SliderKey, v: number) => {
     setDraft((d) => ({ ...d, [key]: v }))
     pending.current[key] = v
@@ -37,23 +34,9 @@ export function PlanScreen({ state, act }: { state: State; act: Act }) {
     }, 400)
   }
 
-  const answer =
-    plan.freeAt >= 0 ? (
-      <>
-        Free to stop in <em>{START_YEAR + plan.freeAt}</em>, at {a.currentAge + plan.freeAt}, spending {money(a.retireSpending)} a year.
-      </>
-    ) : (
-      <>
-        Not free within {MAX_STOP} years. Stopping in {START_YEAR + MAX_STOP} supports <em>{money(spend)} a year</em>.
-      </>
-    )
-
   return (
     <div className="stack-lg">
-      <section className="card stack-sm plan-top">
-        <p className="hero-sm">{answer}</p>
-        <FanChart bands={plan.bands(stop, spend)} stop={stop} startYear={START_YEAR} endAge={a.planToAge} height={150} />
-      </section>
+      <FreedomCard plan={plan} assumptions={a} />
 
       {groups.map((g) => (
         <section key={g} className="stack-sm">
@@ -105,8 +88,7 @@ export function PlanScreen({ state, act }: { state: State; act: Act }) {
       </section>
 
       <p className="caption">
-        Chart: portfolio of {exact(netWorth)} in today's dollars, middle half of {plan.runs} simulated markets. Spending lasts
-        to {a.planToAge} in {a.confidencePct}% of them. Slider changes save to the same plan Claude reads.
+        Net worth {exact(netWorth)}. Slider changes save to the same plan Claude reads.
       </p>
     </div>
   )

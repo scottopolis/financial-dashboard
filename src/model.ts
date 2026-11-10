@@ -1,14 +1,27 @@
 // The app's data model, shared by the web app and the agent server.
 // Percentages are stored as percent numbers (7.5 means 7.5%) so agents can set them directly.
 
+/** A portfolio's type, which decides how its holdings are valued. */
 export type AssetKind = 'Stocks' | 'Crypto' | 'Alternatives' | 'Cash'
 export const assetKinds: AssetKind[] = ['Stocks', 'Crypto', 'Alternatives', 'Cash']
+export const kindInfo: Record<AssetKind, string> = {
+  Stocks: 'stocks, ETFs, and funds by ticker and shares; priced daily',
+  Crypto: 'coins by symbol and amount; priced daily',
+  Alternatives: 'syndications, real estate, private funds; you enter the value',
+  Cash: 'savings and checking; you enter the balance, and interest accrues daily at its APY',
+}
+export const isPriced = (k: AssetKind) => k === 'Stocks' || k === 'Crypto'
+
+/** A group of holdings, such as Stocks or Real estate. */
+export type Portfolio = { id: string; name: string; kind: AssetKind }
 
 export type Distribution = { date: string; amount: number }
 
 export type Holding = {
   id: string
   name: string
+  portfolioId: string
+  /** The portfolio's type, copied when the holding is added. */
   kind: AssetKind
   /** Current value in dollars. For priced holdings this is quantity × price. */
   value: number
@@ -23,6 +36,11 @@ export type Holding = {
   valuedOn?: string
   distributions: Distribution[]
   note?: string
+  /** Yearly interest (APY, in percent) that accrues daily into value, for cash and other manual holdings. */
+  interestPct?: number
+  /** Date (YYYY-MM-DD) interest has been added through, and the total added so far. */
+  accruedOn?: string
+  interestEarned?: number
 }
 
 export type Purchase = { id: string; label: string; year: number; amount: number }
@@ -31,6 +49,8 @@ export type Assumptions = {
   currentAge: number
   /** Yearly spending in retirement, in today's dollars. */
   retireSpending: number
+  /** Share of the portfolio withdrawn each year after you stop, in percent. 0 means auto: the most that lasts at confidencePct. */
+  withdrawalPct: number
   planToAge: number
   /** Share of simulated markets in which the money must last, in percent. */
   confidencePct: number
@@ -52,6 +72,7 @@ export type Assumptions = {
 export type Change = { at: string; by: string; text: string; key?: string }
 
 export type State = {
+  portfolios: Portfolio[]
   holdings: Holding[]
   assumptions: Assumptions
   changes: Change[]
@@ -84,6 +105,7 @@ export const planSliders: SliderSpec[] = [
   { key: 'socialSecurity', label: 'Social Security', group: 'Savings and income', min: 0, max: 60000, step: 1000, unit: '$/yr' },
   { key: 'socialSecurityAge', label: 'Social Security starts at', group: 'Savings and income', min: 62, max: 70, step: 1, unit: 'age' },
   { key: 'retireSpending', label: 'Spending in retirement', group: 'Goal', min: 20000, max: 300000, step: 5000, unit: '$/yr', hint: "In today's dollars" },
+  { key: 'withdrawalPct', label: 'Withdrawal rate', group: 'Goal', min: 0, max: 8, step: 0.5, unit: '%', hint: 'Share of your portfolio you take out each year after you stop. Auto finds the most that lasts at your confidence.' },
   { key: 'currentAge', label: 'Current age', group: 'Goal', min: 18, max: 55, step: 1, unit: 'age' },
   { key: 'planToAge', label: 'Money lasts until', group: 'Goal', min: 80, max: 105, step: 1, unit: 'age' },
   { key: 'confidencePct', label: 'Confidence', group: 'Goal', min: 50, max: 99, step: 1, unit: '%', hint: 'Share of simulated markets where the money lasts' },
@@ -92,7 +114,8 @@ export const planSliders: SliderSpec[] = [
   { key: 'inflationPct', label: 'Inflation', group: 'Markets', min: 0, max: 8, step: 0.25, unit: '%' },
 ]
 
-export function formatSlider(s: Pick<SliderSpec, 'unit'>, v: number) {
+export function formatSlider(s: Pick<SliderSpec, 'unit' | 'key'>, v: number) {
+  if (s.key === 'withdrawalPct' && !v) return 'Auto'
   if (s.unit === '$/yr') return `$${Math.round(v).toLocaleString('en-US')}/yr`
   if (s.unit === '%') return `${+v.toFixed(2)}%`
   if (s.unit === 'yrs') return `${v} ${v === 1 ? 'year' : 'years'}`
@@ -102,6 +125,7 @@ export function formatSlider(s: Pick<SliderSpec, 'unit'>, v: number) {
 export function describe(h: Holding) {
   if (h.symbol && h.quantity !== undefined)
     return `${h.symbol}, ${h.quantity.toLocaleString('en-US')} ${h.kind === 'Crypto' ? h.symbol : 'sh'}`
+  if (h.interestPct) return `${+h.interestPct.toFixed(2)}% APY, interest added daily`
   if (h.valuedOn) return `${h.kind === 'Cash' ? 'Cash' : 'Manual'}, valued ${shortDate(h.valuedOn)}`
   return h.kind
 }
@@ -128,11 +152,52 @@ export function valueHistory(h: Holding): number[] {
   return out
 }
 
+export const today = () => new Date().toISOString().slice(0, 10)
+
+/** Adds interest earned since the last accrual to every holding with an APY. Returns whether anything changed. */
+export function accrueInterest(s: State, on = today()) {
+  let changed = false
+  for (const h of s.holdings) {
+    if (!h.interestPct) continue
+    const from = h.accruedOn ?? h.valuedOn ?? on
+    const days = (Date.parse(on) - Date.parse(from)) / 86400000
+    if (days <= 0) continue
+    const next = h.value * Math.pow(1 + h.interestPct / 100, days / 365)
+    h.interestEarned = (h.interestEarned ?? 0) + next - h.value
+    h.value = next
+    h.accruedOn = on
+    changed = true
+  }
+  return changed
+}
+
+export const defaultPortfolios: Portfolio[] = assetKinds.map((kind) => ({ id: kind.toLowerCase(), name: kind, kind }))
+
+/** Brings data saved by older versions up to date. Returns whether anything changed. */
+export function migrate(s: State) {
+  let changed = false
+  if (s.assumptions.withdrawalPct === undefined) {
+    s.assumptions.withdrawalPct = 0
+    changed = true
+  }
+  if (!s.portfolios) {
+    s.portfolios = structuredClone(defaultPortfolios)
+    changed = true
+  }
+  for (const h of s.holdings)
+    if (!h.portfolioId) {
+      h.portfolioId = s.portfolios.find((p) => p.kind === h.kind)!.id
+      changed = true
+    }
+  return changed
+}
+
 const daysAgo = (d: number) => new Date(Date.now() - d * 86400000).toISOString()
 
 export const defaultAssumptions: Assumptions = {
   currentAge: 42,
   retireSpending: 80000,
+  withdrawalPct: 0,
   planToAge: 95,
   confidencePct: 85,
   returnPct: 7.5,
@@ -149,13 +214,15 @@ export const defaultAssumptions: Assumptions = {
 
 /** Sample data the server starts with until real holdings are added. */
 export const sampleState: State = {
+  portfolios: defaultPortfolios,
   holdings: [
-    { id: 'vti', name: 'Vanguard Total Market', kind: 'Stocks', symbol: 'VTI', quantity: 1320, price: 312.58, value: 412605.6, costBasis: 301000, dayChangePct: 0.4, distributions: [] },
-    { id: 'aapl', name: 'Apple', kind: 'Stocks', symbol: 'AAPL', quantity: 160, price: 240, value: 38400, costBasis: 22100, dayChangePct: -0.8, distributions: [] },
-    { id: 'btc', name: 'Bitcoin', kind: 'Crypto', symbol: 'BTC', quantity: 0.85, price: 96000, value: 81600, costBasis: 41000, dayChangePct: 2.1, distributions: [] },
-    { id: 'eth', name: 'Ethereum', kind: 'Crypto', symbol: 'ETH', quantity: 5.2, price: 3404, value: 17700.8, costBasis: 14300, dayChangePct: 1.6, distributions: [] },
+    { id: 'vti', portfolioId: 'stocks', name: 'Vanguard Total Market', kind: 'Stocks', symbol: 'VTI', quantity: 1320, price: 312.58, value: 412605.6, costBasis: 301000, dayChangePct: 0.4, distributions: [] },
+    { id: 'aapl', portfolioId: 'stocks', name: 'Apple', kind: 'Stocks', symbol: 'AAPL', quantity: 160, price: 240, value: 38400, costBasis: 22100, dayChangePct: -0.8, distributions: [] },
+    { id: 'btc', portfolioId: 'crypto', name: 'Bitcoin', kind: 'Crypto', symbol: 'BTC', quantity: 0.85, price: 96000, value: 81600, costBasis: 41000, dayChangePct: 2.1, distributions: [] },
+    { id: 'eth', portfolioId: 'crypto', name: 'Ethereum', kind: 'Crypto', symbol: 'ETH', quantity: 5.2, price: 3404, value: 17700.8, costBasis: 14300, dayChangePct: 1.6, distributions: [] },
     {
       id: 'austin-multifamily',
+      portfolioId: 'alternatives',
       name: 'Austin multifamily',
       kind: 'Alternatives',
       value: 100000,
@@ -172,6 +239,7 @@ export const sampleState: State = {
     },
     {
       id: 'self-storage-fund',
+      portfolioId: 'alternatives',
       name: 'Self-storage fund',
       kind: 'Alternatives',
       value: 50000,
@@ -183,7 +251,7 @@ export const sampleState: State = {
         { date: '2026-07-01', amount: 875 },
       ],
     },
-    { id: 'savings', name: 'Savings', kind: 'Cash', value: 42000, costBasis: 42000, dayChangePct: null, valuedOn: '2026-11-01', distributions: [], note: 'High-yield savings, 4.1% APY.' },
+    { id: 'savings', portfolioId: 'cash', name: 'High-yield savings', kind: 'Cash', value: 42000, costBasis: 42000, dayChangePct: null, valuedOn: '2026-11-01', interestPct: 4.1, accruedOn: '2026-11-01', distributions: [] },
   ],
   assumptions: defaultAssumptions,
   changes: [

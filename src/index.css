@@ -14,6 +14,12 @@
   --kind-Crypto: #f59e0b;
   --kind-Alternatives: #10b981;
   --kind-Cash: #a1a1aa;
+  --series-1: #2563eb;
+  --series-2: #f59e0b;
+  --series-3: #10b981;
+  --series-4: #a1a1aa;
+  --series-5: #8b5cf6;
+  --series-6: #ec4899;
   --radius: 14px;
   --tabbar: 0px;
   --header-h: 59px;
@@ -39,6 +45,8 @@
     --context: #3a3a3e;
     --kind-Stocks: #5b8cff;
     --kind-Cash: #71717a;
+    --series-1: #5b8cff;
+    --series-4: #71717a;
   }
 }
 
@@ -720,4 +728,33 @@ a.list-row:active {
   font-size: 12px;
   line-height: 1.5;
   white-space: pre;
+}
+
+/* Portfolios and forms */
+.group-name {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.group-name .kind-dot {
+  align-self: center;
+}
+.input select {
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: none;
+  font: inherit;
+  font-size: 16px;
+  color: inherit;
+  padding: 10px 0;
+}
+
+.inline-form .field.grow {
+  flex: 1 1 140px;
+}
+.inline-form .btn {
+  flex: 1 0 auto;
 }

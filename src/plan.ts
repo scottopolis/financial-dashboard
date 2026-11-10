@@ -45,9 +45,11 @@ export function makePlan(a: Assumptions, netWorth: number, startYear: number) {
   // retirement year k: B + Σ f_i / G_i ≥ W · Σ 1 / G_i, where G_i is growth since stopping.
   const maxSpend = (stop: number) => {
     const out = new Float64Array(RUNS)
+    const atStop = new Float64Array(RUNS)
     for (let run = 0; run < RUNS; run++) {
       let b = netWorth
       for (let i = 0; i < stop; i++) b = (b + flow(i, stop)) * (1 + ret(run, i))
+      atStop[run] = Math.max(0, b)
       let growth = 1
       let flows = 0
       let annuity = 0
@@ -60,11 +62,23 @@ export function makePlan(a: Assumptions, netWorth: number, startYear: number) {
       }
       out[run] = Math.max(0, min)
     }
-    return out.sort()
+    return { spends: out, atStop }
   }
 
-  const spendRuns = Array.from({ length: MAX_STOP + 1 }, (_, stop) => maxSpend(stop))
-  const spendByStop = spendRuns.map((s) => s[Math.floor((1 - a.confidencePct / 100) * RUNS)])
+  const sims = Array.from({ length: MAX_STOP + 1 }, (_, stop) => maxSpend(stop))
+  const spendRuns = sims.map((s) => Float64Array.from(s.spends).sort())
+  const medianAtStop = sims.map((s) => Float64Array.from(s.atStop).sort()[RUNS >> 1])
+  /** Share of runs in which spending w a year lasts if you stop after `stop` years. */
+  const lasts = (stop: number, w: number) => spendRuns[stop].filter((s) => s >= w).length / RUNS
+  const rate = (a.withdrawalPct ?? 0) / 100
+  const confidence = a.confidencePct / 100
+  // With a withdrawal rate, each simulated market withdraws that share of its own portfolio when you
+  // stop, as the 4% rule does. Shown spending is the typical (median) withdrawal.
+  // In auto mode, spending is the most that lasts in confidencePct of markets.
+  const share = (stop: number, ok: (w: number, max: number) => boolean) =>
+    sims[stop].spends.filter((max, run) => ok(rate * sims[stop].atStop[run], max)).length / RUNS
+  const spendByStop = sims.map((_, stop) => (rate ? rate * medianAtStop[stop] : spendRuns[stop][Math.floor((1 - confidence) * RUNS)]))
+  const lastsAt = (stop: number) => (rate ? share(stop, (w, max) => w <= max) : lasts(stop, spendByStop[stop]))
 
   // Portfolio balance by year: the middle half of runs and the median.
   const bands = (stop: number, spend: number): Band[] => {
@@ -84,12 +98,21 @@ export function makePlan(a: Assumptions, netWorth: number, startYear: number) {
   return {
     runs: RUNS,
     startYear,
+    /** Withdrawal rate in percent, or 0 in auto mode. */
+    withdrawalPct: a.withdrawalPct ?? 0,
+    /** Median portfolio in today's dollars when you stop, indexed by years until you stop. */
+    portfolioAtStop: medianAtStop,
     /** Spending that lasts in `confidencePct` of markets, indexed by years until you stop. */
     spendByStop,
     /** Years until you can stop and spend `retireSpending`, or −1 if not within MAX_STOP. */
-    freeAt: spendByStop.findIndex((s) => s >= a.retireSpending),
+    /** With a withdrawal rate: the first stop where, in `confidencePct` of markets, the withdrawal covers the target and lasts. */
+    freeAt: rate
+      ? spendByStop.findIndex((_, stop) => share(stop, (w, max) => w >= a.retireSpending && w <= max) >= confidence)
+      : spendByStop.findIndex((s) => s >= a.retireSpending),
     /** Share of markets in which `retireSpending` lasts if you stop after `stop` years. */
-    successAt: (stop: number) => spendRuns[stop].filter((s) => s >= a.retireSpending).length / RUNS,
+    successAt: (stop: number) => lasts(stop, a.retireSpending),
+    /** Share of markets in which spendByStop[stop] lasts. */
+    lastsAt,
     bands,
   }
 }
@@ -98,6 +121,6 @@ export type Plan = ReturnType<typeof makePlan>
 
 export const money = (v: number) =>
   v >= 1e6 ? `$${(v / 1e6).toFixed(2)}M` : `$${Math.round(v / 1000).toLocaleString('en-US')}k`
-export const exact = (v: number) => `$${Math.round(v).toLocaleString('en-US')}`
+export const exact = (v: number) => `${v < -0.5 ? '−' : ''}$${Math.abs(Math.round(v)).toLocaleString('en-US')}`
 export const signedPct = (pct: number) => `${pct < 0 ? '−' : '+'}${Math.abs(pct).toFixed(1)}%`
 export const netWorthOf = (holdings: { value: number }[]) => holdings.reduce((s, h) => s + h.value, 0)
