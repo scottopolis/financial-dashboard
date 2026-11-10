@@ -55,6 +55,8 @@ export type State = {
   holdings: Holding[]
   assumptions: Assumptions
   changes: Change[]
+  /** Last time the price feed ran. */
+  pricesUpdatedAt?: string
   /** Last time an agent called the connector. */
   agentSeenAt?: string
 }

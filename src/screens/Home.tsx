@@ -103,7 +103,10 @@ export function Home({ state }: { state: State }) {
               </a>
             ))}
           </div>
-          <p className="caption">To add or change holdings, ask Claude.</p>
+          <p className="caption">
+            {state.pricesUpdatedAt ? `Prices updated ${ago(state.pricesUpdatedAt)}, daily from Yahoo Finance. ` : ''}To add or
+            change holdings, ask Claude.
+          </p>
         </section>
         <section className="stack-sm">
           <div className="row-between">

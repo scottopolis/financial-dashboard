@@ -23,7 +23,7 @@ export function mcpServer() {
       s.agentSeenAt = new Date().toISOString()
       save(s)
       try {
-        return { content: [{ type: 'text' as const, text: runTool(t.name, args, AGENT) }] }
+        return { content: [{ type: 'text' as const, text: await runTool(t.name, args, AGENT) }] }
       } catch (e) {
         return { isError: true, content: [{ type: 'text' as const, text: errorText(e) }] }
       }

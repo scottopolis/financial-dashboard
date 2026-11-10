@@ -3,7 +3,7 @@ import http from 'node:http'
 import path from 'node:path'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { connectorToken, getState, repoDir } from './store.ts'
-import { overview, runTool, tools } from './tools.ts'
+import { overview, refreshIfStale, runTool, tools } from './tools.ts'
 import { errorText, mcpServer } from './mcp.ts'
 
 // The local server:
@@ -64,7 +64,7 @@ http
         return send(res, 200, tools.map((t) => ({ name: t.name, description: t.description })))
       const call = url.pathname.match(/^\/api\/tools\/([a-z_]+)$/)
       if (req.method === 'POST' && call) {
-        const result = runTool(call[1], await readBody(req), 'You')
+        const result = await runTool(call[1], await readBody(req), 'You')
         return send(res, 200, { result, state: getState() })
       }
       if (url.pathname.startsWith('/api/')) return send(res, 404, { error: 'Not found' })
@@ -77,3 +77,7 @@ http
   .listen(PORT, HOST, () => {
     console.log(`Dashboard: http://localhost:${PORT}`)
   })
+
+// Prices update once a day: on start, then checked every hour.
+refreshIfStale()
+setInterval(refreshIfStale, 60 * 60 * 1000)

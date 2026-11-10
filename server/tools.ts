@@ -11,17 +11,18 @@ import {
 } from '../src/model.ts'
 import { exact, makePlan, MAX_STOP, netWorthOf } from '../src/plan.ts'
 import { getState, save } from './store.ts'
+import { fetchQuote } from './prices.ts'
 
 // Every action on the data, used by both the agent (over MCP) and the web app (over /api/tools).
 // Each tool returns plain text written for an agent to read.
 
-type Tool = { name: string; description: string; input: z.ZodRawShape; run: (args: never, by: string) => string }
+type Tool = { name: string; description: string; input: z.ZodRawShape; run: (args: never, by: string) => string | Promise<string> }
 
 function tool<S extends z.ZodRawShape>(t: {
   name: string
   description: string
   input: S
-  run: (args: z.infer<z.ZodObject<S>>, by: string) => string
+  run: (args: z.infer<z.ZodObject<S>>, by: string) => string | Promise<string>
 }): Tool {
   return t as unknown as Tool
 }
@@ -84,7 +85,7 @@ export function overview(s: State = getState()) {
   const rows = s.holdings.map((h) => {
     const detail = h.symbol ? `${h.quantity} ${h.symbol} at ${exact(h.price ?? 0)}` : `valued ${h.valuedOn ?? 'never'}`
     const paid = h.distributions.reduce((t, d) => t + d.amount, 0)
-    return `| ${h.id} | ${h.name} | ${h.kind} | ${exact(h.value)} | ${exact(h.costBasis)} | ${exact(h.value - h.costBasis)} | ${h.dayChangePct === null ? 'manual' : h.dayChangePct + '%'} | ${paid ? exact(paid) : '—'} | ${detail} |`
+    return `| ${h.id} | ${h.name} | ${h.kind} | ${exact(h.value)} | ${exact(h.costBasis)} | ${exact(h.value - h.costBasis)} | ${h.dayChangePct === null ? 'manual' : h.dayChangePct.toFixed(2) + '%'} | ${paid ? exact(paid) : '—'} | ${detail} |`
   })
   const dists = s.holdings
     .flatMap((h) => h.distributions.map((d) => ({ ...d, name: h.name })))
@@ -95,6 +96,7 @@ export function overview(s: State = getState()) {
     `# Portfolio and freedom plan, as of ${today()}`,
     '',
     `Net worth: ${exact(net)} (${todayChange >= 0 ? '+' : '−'}${exact(Math.abs(todayChange))} today).`,
+    `Stock and crypto prices from Yahoo Finance, last updated ${s.pricesUpdatedAt ? s.pricesUpdatedAt.slice(0, 16).replace('T', ' ') + ' UTC' : 'never'}. Alternatives and cash are valued manually.`,
     '',
     '## Allocation',
     ...alloc,
@@ -226,21 +228,29 @@ export const tools: Tool[] = [
   tool({
     name: 'add_holding',
     description:
-      'Add an investment. For stocks and crypto pass symbol, quantity, and price; value is quantity × price. For alternatives such as real estate syndications, and for cash, pass value.',
+      'Add an investment. For stocks, funds, and crypto pass symbol and quantity; the current price is looked up (pass price only to override it), and it updates daily after that. For alternatives such as real estate syndications, and for cash, pass value.',
     input: {
       name: z.string(),
       kind,
       symbol: z.string().optional(),
       quantity: z.number().positive().optional(),
-      price: z.number().positive().optional().describe('Current price per share or coin.'),
+      price: z.number().positive().optional().describe('Price per share or coin. Omit to look it up.'),
       value: z.number().min(0).optional().describe('Current value, for holdings without a price.'),
       costBasis: z.number().min(0).optional().describe('Total amount invested. Defaults to the current value.'),
       note: z.string().optional(),
     },
-    run: (a, by) => {
-      const s = getState()
+    run: async (a, by) => {
       const priced = a.symbol !== undefined
-      if (priced && (a.quantity === undefined || a.price === undefined)) throw new Error('A holding with a symbol needs quantity and price.')
+      if (priced && a.quantity === undefined) throw new Error('A holding with a symbol needs quantity.')
+      let dayChangePct = 0
+      if (priced && a.price === undefined) {
+        const q = await fetchQuote(a.symbol!.toUpperCase(), a.kind as Holding['kind']).catch((e) => {
+          throw new Error(`${e.message}. Check the symbol, or pass price.`)
+        })
+        a.price = q.price
+        dayChangePct = q.dayChangePct
+      }
+      const s = getState()
       const value = priced ? a.quantity! * a.price! : a.value
       if (value === undefined) throw new Error('Pass value, or symbol, quantity, and price.')
       const h: Holding = {
@@ -249,7 +259,7 @@ export const tools: Tool[] = [
         kind: a.kind as Holding['kind'],
         value,
         costBasis: a.costBasis ?? value,
-        dayChangePct: priced ? 0 : null,
+        dayChangePct: priced ? dayChangePct : null,
         distributions: [],
         ...(priced ? { symbol: a.symbol!.toUpperCase(), quantity: a.quantity, price: a.price } : { valuedOn: today() }),
         ...(a.note ? { note: a.note } : {}),
@@ -324,10 +334,55 @@ export const tools: Tool[] = [
       return `Recorded ${exact(amount)} from ${h.name}. Total paid out: ${exact(h.distributions.reduce((t, d) => t + d.amount, 0))}.`
     },
   }),
+  tool({
+    name: 'refresh_prices',
+    description:
+      'Fetch current prices for every stock, fund, and crypto holding now and update their values. Prices also refresh automatically once a day.',
+    input: {},
+    run: () => refreshPrices(),
+  }),
 ]
 
+/** Updates every priced holding from the price feed. Holdings whose price can't be found keep their last price. */
+export async function refreshPrices() {
+  const priced = getState().holdings.filter((h) => h.symbol)
+  const quotes = await Promise.allSettled(priced.map((h) => fetchQuote(h.symbol!, h.kind)))
+  // Read again after the network calls, since the app or the agent may have saved meanwhile.
+  const s = getState()
+  const failed: string[] = []
+  let updated = 0
+  priced.forEach((p, i) => {
+    const q = quotes[i]
+    const h = s.holdings.find((x) => x.id === p.id)
+    if (!h) return
+    if (q.status === 'rejected') return void failed.push(`${h.symbol} (${(q.reason as Error).message})`)
+    h.price = q.value.price
+    h.dayChangePct = q.value.dayChangePct
+    h.value = (h.quantity ?? 0) * h.price
+    updated++
+  })
+  s.pricesUpdatedAt = new Date().toISOString()
+  if (updated) log(s, 'Price feed', `updated ${updated} ${updated === 1 ? 'price' : 'prices'}`, 'prices')
+  save()
+  return [
+    `Updated ${updated} of ${priced.length} prices. Net worth is now ${exact(netWorthOf(s.holdings))}.`,
+    ...(failed.length ? [`Couldn't price: ${failed.join('; ')}.`] : []),
+  ].join(' ')
+}
+
+/** Refreshes prices if they haven't been updated today (local time). */
+export async function refreshIfStale() {
+  const last = getState().pricesUpdatedAt
+  if (last && new Date(last).toDateString() === new Date().toDateString()) return
+  try {
+    console.error(await refreshPrices())
+  } catch (e) {
+    console.error('Price refresh failed:', (e as Error).message)
+  }
+}
+
 /** Runs a tool by name after validating its arguments. Throws with a readable message on bad input. */
-export function runTool(name: string, args: unknown, by: string) {
+export async function runTool(name: string, args: unknown, by: string) {
   const t = tools.find((x) => x.name === name)
   if (!t) throw new Error(`Unknown tool "${name}".`)
   const parsed = z.object(t.input).strict().parse(args ?? {})

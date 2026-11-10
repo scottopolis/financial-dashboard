@@ -6,7 +6,7 @@ import { ChangeFeed } from './ChangeFeed'
 const prompts = [
   'When can I stop working, and how sure is that?',
   'What if I saved an extra $20k a year? Save it if it gets me there sooner.',
-  'I bought 25 shares of VOO at $571.',
+  'I bought 25 shares of VOO.',
   'The Austin multifamily paid a $2,250 distribution today.',
   'Plan a $150k house down payment in 2029.',
 ]

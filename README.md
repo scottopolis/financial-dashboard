@@ -50,6 +50,9 @@ Then ask things like "When can I stop working?", "I bought 25 shares of VOO at $
 | `set_big_purchase`, `remove_big_purchase` | One-time expenses such as a house or college |
 | `add_holding`, `update_holding`, `remove_holding` | Stocks, crypto, alternatives, cash |
 | `record_distribution` | Payouts from syndications and dividends |
+| `refresh_prices` | Fetches current stock, fund, and crypto prices now |
+
+Prices come from Yahoo Finance's public chart endpoint (no API key). They refresh when the server or connector starts if they're older than today, and hourly checks keep them daily while the server runs. `server/prices.ts` is the only file to change to use another source.
 
 The server also offers the connector over HTTP at `/mcp/<secret>` for clients that take a URL. The secret is in `data/mcp-token`. It listens only on `127.0.0.1`.
 
