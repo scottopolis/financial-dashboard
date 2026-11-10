@@ -80,6 +80,8 @@ export type State = {
   pricesUpdatedAt?: string
   /** Last time an agent called the connector. */
   agentSeenAt?: string
+  /** Net worth at the end of each day, oldest first. */
+  history?: { date: string; value: number }[]
 }
 
 export const START_YEAR = new Date().getFullYear()
@@ -109,7 +111,7 @@ export const planSliders: SliderSpec[] = [
   { key: 'currentAge', label: 'Current age', group: 'Goal', min: 18, max: 55, step: 1, unit: 'age' },
   { key: 'planToAge', label: 'Money lasts until', group: 'Goal', min: 80, max: 105, step: 1, unit: 'age' },
   { key: 'confidencePct', label: 'Confidence', group: 'Goal', min: 50, max: 99, step: 1, unit: '%', hint: 'Share of simulated markets where the money lasts' },
-  { key: 'returnPct', label: 'Average return', group: 'Markets', min: 0, max: 12, step: 0.25, unit: '%', hint: 'Yearly, before inflation' },
+  { key: 'returnPct', label: 'Average return', group: 'Markets', min: 0, max: 12, step: 0.25, unit: '%', hint: 'Yearly, before inflation. Cash grows at its own APY instead.' },
   { key: 'volatilityPct', label: 'Yearly swings', group: 'Markets', min: 0, max: 30, step: 1, unit: '%', hint: 'Standard deviation; a stock index is about 15%' },
   { key: 'inflationPct', label: 'Inflation', group: 'Markets', min: 0, max: 8, step: 0.25, unit: '%' },
 ]
@@ -172,6 +174,18 @@ export function accrueInterest(s: State, on = today()) {
 }
 
 export const defaultPortfolios: Portfolio[] = assetKinds.map((kind) => ({ id: kind.toLowerCase(), name: kind, kind }))
+
+/** Records today's net worth in the daily history. Returns whether anything changed. */
+export function recordHistory(s: State, on = today()) {
+  const value = Math.round(s.holdings.reduce((t, h) => t + h.value, 0))
+  s.history ??= []
+  const last = s.history[s.history.length - 1]
+  if (last?.date === on) {
+    if (last.value === value) return false
+    last.value = value
+  } else s.history.push({ date: on, value })
+  return true
+}
 
 /** Brings data saved by older versions up to date. Returns whether anything changed. */
 export function migrate(s: State) {

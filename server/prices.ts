@@ -17,3 +17,19 @@ export async function fetchQuote(symbol: string, kind: AssetKind): Promise<Quote
   const prev: number | undefined = meta.previousClose ?? meta.chartPreviousClose
   return { price, dayChangePct: prev ? Math.round(((price - prev) / prev) * 10000) / 100 : 0 }
 }
+
+/** Daily closing prices for the past year, keyed by date (YYYY-MM-DD). */
+export async function fetchHistory(symbol: string, kind: AssetKind): Promise<Map<string, number>> {
+  const ticker = kind === 'Crypto' ? `${symbol}-USD` : symbol
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?range=1y&interval=1d`
+  const res = await fetch(url, { headers: { 'user-agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(15000) })
+  const body: any = await res.json().catch(() => null) // eslint-disable-line @typescript-eslint/no-explicit-any
+  const r = body?.chart?.result?.[0]
+  const closes: (number | null)[] = r?.indicators?.quote?.[0]?.close ?? []
+  const out = new Map<string, number>()
+  ;(r?.timestamp ?? []).forEach((t: number, i: number) => {
+    if (closes[i]) out.set(new Date(t * 1000).toISOString().slice(0, 10), closes[i]!)
+  })
+  if (!out.size) throw new Error(`No price history for ${symbol}`)
+  return out
+}

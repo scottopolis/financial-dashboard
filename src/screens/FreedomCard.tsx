@@ -3,11 +3,21 @@ import { START_YEAR, type Assumptions } from '../model.ts'
 import { MAX_STOP, money, type Plan } from '../plan.ts'
 import { FanChart } from '../charts/FanChart'
 
+const STOP_KEY = 'freedom.stopYears'
+
 const yearsLabel = (x: number) => (x === 0 ? 'now' : x === 1 ? 'in 1 year' : `in ${x} years`)
 
 /** The freedom answer with its stop-year slider and range chart, shared by Home and Plan. */
 export function FreedomCard({ plan, assumptions: a, link }: { plan: Plan; assumptions: Assumptions; link?: boolean }) {
-  const [picked, setStop] = useState<number | null>(null)
+  // The stop year you pick is kept in this browser, so it survives reloads and page changes.
+  const [picked, setPicked] = useState<number | null>(() => {
+    const v = localStorage.getItem(STOP_KEY)
+    return v === null ? null : Math.min(MAX_STOP, Math.max(0, Number(v)))
+  })
+  const setStop = (v: number) => {
+    localStorage.setItem(STOP_KEY, String(v))
+    setPicked(v)
+  }
   const stop = picked ?? (plan.freeAt >= 0 ? plan.freeAt : 10)
   const spend = plan.spendByStop[stop]
   const lasts = Math.round(plan.lastsAt(stop) * 100)

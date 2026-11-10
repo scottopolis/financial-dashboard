@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
-import { accrueInterest, migrate, sampleState, type State } from '../src/model.ts'
+import { accrueInterest, migrate, recordHistory, sampleState, type State } from '../src/model.ts'
 
 // All data lives in one JSON file next to the code, so the web server and the agent's stdio
 // server (a separate process Claude starts) read and write the same data.
@@ -17,7 +17,9 @@ let state: State = structuredClone(sampleState)
 /** Reads the latest state from disk, since another process may have changed it, and adds any interest due. */
 export function getState() {
   if (fs.existsSync(file)) state = JSON.parse(fs.readFileSync(file, 'utf8'))
-  if (migrate(state) || accrueInterest(state)) save()
+  const migrated = migrate(state)
+  const accrued = accrueInterest(state)
+  if (recordHistory(state) || migrated || accrued) save()
   return state
 }
 

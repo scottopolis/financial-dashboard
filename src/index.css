@@ -758,3 +758,26 @@ a.list-row:active {
 .inline-form .btn {
   flex: 1 0 auto;
 }
+
+.apy {
+  color: var(--accent);
+}
+
+.nw-chart {
+  touch-action: pan-y;
+  cursor: crosshair;
+}
+.nw-chart .band {
+  opacity: 0.6;
+}
+.nw-dot {
+  fill: var(--accent);
+  stroke: var(--surface);
+  stroke-width: 2;
+}
+.nw-ranges {
+  justify-self: start;
+}
+.nw-ranges button {
+  padding: 0 14px;
+}

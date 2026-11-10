@@ -12,12 +12,23 @@ export function PlanScreen({ state, act }: { state: State; act: Act }) {
   const [draft, setDraft] = useState<Partial<Record<SliderKey, number>>>({})
   const pending = useRef<Partial<Record<SliderKey, number>>>({})
   const timer = useRef<number | undefined>(undefined)
-  useEffect(() => () => clearTimeout(timer.current), [])
+  // Leaving the page saves any slider move still waiting on its pause.
+  const actRef = useRef(act)
+  useEffect(() => {
+    actRef.current = act
+  }, [act])
+  useEffect(
+    () => () => {
+      clearTimeout(timer.current)
+      if (Object.keys(pending.current).length) actRef.current('update_plan', pending.current)
+    },
+    [],
+  )
 
   const a: Assumptions = { ...state.assumptions, ...draft }
   const netWorth = netWorthOf(state.holdings)
   const key = JSON.stringify(a)
-  const plan = useMemo(() => makePlan(JSON.parse(key), netWorth, START_YEAR), [key, netWorth])
+  const plan = useMemo(() => makePlan(JSON.parse(key), state.holdings, START_YEAR), [key, state.holdings])
   const move = (key: SliderKey, v: number) => {
     setDraft((d) => ({ ...d, [key]: v }))
     pending.current[key] = v

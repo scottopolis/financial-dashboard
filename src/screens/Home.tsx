@@ -3,11 +3,12 @@ import { ago, describe, START_YEAR, type State } from '../model.ts'
 import { exact, makePlan, money, netWorthOf, signedPct } from '../plan.ts'
 import { FreedomCard } from './FreedomCard'
 import { ChangeFeed } from './ChangeFeed'
+import { NetWorthChart } from '../charts/NetWorthChart'
 
 export function Home({ state }: { state: State }) {
   const { holdings, assumptions: a } = state
   const netWorth = netWorthOf(holdings)
-  const plan = useMemo(() => makePlan(a, netWorth, START_YEAR), [a, netWorth])
+  const plan = useMemo(() => makePlan(a, holdings, START_YEAR), [a, holdings])
   const today = holdings.reduce((s, h) => s + (h.dayChangePct ? (h.value * h.dayChangePct) / (100 + h.dayChangePct) : 0), 0)
   const groups = state.portfolios.map((p, i) => {
     const hs = holdings.filter((h) => h.portfolioId === p.id)
@@ -18,16 +19,7 @@ export function Home({ state }: { state: State }) {
   return (
     <div className="stack-lg">
       <section className="stack-sm">
-        <div className="stack-xs">
-          <span className="label">Net worth</span>
-          <div className="row">
-            <span className="big num">{exact(netWorth)}</span>
-            <span className={today >= 0 ? 'delta up' : 'delta down'}>
-              {today >= 0 ? '+' : '−'}
-              {exact(Math.abs(today))} today
-            </span>
-          </div>
-        </div>
+        <NetWorthChart history={state.history ?? []} netWorth={netWorth} today={today} />
         <div className="alloc">
           {funded.map((g) => (
             <span key={g.id} style={{ flex: g.value, background: g.color }} />

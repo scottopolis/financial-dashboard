@@ -13,9 +13,9 @@ import {
   type SliderKey,
   type State,
 } from '../src/model.ts'
-import { exact, makePlan, MAX_STOP, netWorthOf } from '../src/plan.ts'
+import { cashMix, exact, makePlan, MAX_STOP, netWorthOf } from '../src/plan.ts'
 import { getState, save } from './store.ts'
-import { fetchQuote } from './prices.ts'
+import { fetchHistory, fetchQuote } from './prices.ts'
 
 // Every action on the data, used by both the agent (over MCP) and the web app (over /api/tools).
 // Each tool returns plain text written for an agent to read.
@@ -42,8 +42,8 @@ function log(s: State, by: string, text: string, key?: string) {
   s.changes.length = Math.min(s.changes.length, 200)
 }
 
-function freedomLine(a: Assumptions, netWorth: number) {
-  const p = makePlan(a, netWorth, START_YEAR)
+function freedomLine(a: Assumptions, holdings: Holding[]) {
+  const p = makePlan(a, holdings, START_YEAR)
   const r = p.withdrawalPct
   if (p.freeAt >= 0) {
     const at = `Free to stop working in ${START_YEAR + p.freeAt} (in ${p.freeAt} years, at age ${a.currentAge + p.freeAt})`
@@ -55,15 +55,15 @@ function freedomLine(a: Assumptions, netWorth: number) {
   return `Not free within ${MAX_STOP} years at a ${r}% withdrawal rate (needs at least ${exact(a.retireSpending)}/yr that lasts, in ${a.confidencePct}% of markets). Stopping in ${START_YEAR + MAX_STOP} gives ${exact(p.spendByStop[MAX_STOP])}/yr, which lasts in ${pct(p.lastsAt(MAX_STOP))} of markets.`
 }
 
-function planDetail(a: Assumptions, netWorth: number) {
-  const p = makePlan(a, netWorth, START_YEAR)
+function planDetail(a: Assumptions, holdings: Holding[]) {
+  const p = makePlan(a, holdings, START_YEAR)
   const r = p.withdrawalPct
   const rows = p.spendByStop.map(
     (s, i) =>
       `| ${START_YEAR + i} | ${a.currentAge + i} | ${exact(p.portfolioAtStop[i])} | ${exact(s)} | ${pct(p.lastsAt(i))} | ${pct(p.successAt(i))} |`,
   )
   return [
-    freedomLine(a, netWorth),
+    freedomLine(a, holdings),
     '',
     r
       ? `By the year you stop working: the typical (median) portfolio then, a ${r}% withdrawal of it per year, the chance that withdrawal lasts until ${a.planToAge}, and the chance ${exact(a.retireSpending)}/yr lasts.`
@@ -81,6 +81,28 @@ function assumptionsText(a: Assumptions) {
     '',
     'Big purchases (one-time costs, in today\'s dollars):',
     ...(a.purchases.length ? a.purchases.map((p) => `- ${p.id}: ${p.label}, ${exact(p.amount)} in ${p.year}`) : ['- none']),
+  ].join('\n')
+}
+
+/** Net worth at points in the past, from the daily history. */
+function historySummary(s: State) {
+  const h = s.history ?? []
+  if (h.length < 2) return 'Not enough history yet; it is recorded daily.'
+  const now = h[h.length - 1].value
+  const at = (days: number) => {
+    const cutoff = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10)
+    return h.find((x) => x.date >= cutoff) ?? h[0]
+  }
+  const rows = [7, 30, 90, 182, 365].map((d) => {
+    const x = at(d)
+    const change = now - x.value
+    return `| ${x.date} | ${exact(x.value)} | ${change >= 0 ? '+' : ''}${exact(change)} (${x.value ? ((change / x.value) * 100).toFixed(1) : '0'}%) |`
+  })
+  return [
+    `Daily history from ${h[0].date}. Days before tracking began are estimated from price history with today's quantities. Use get_net_worth_history for every day.`,
+    '| Date | Net worth | Change to today |',
+    '| --- | --- | --- |',
+    ...rows,
   ].join('\n')
 }
 
@@ -121,15 +143,18 @@ export function overview(s: State = getState()) {
     `Net worth: ${exact(net)} (${todayChange >= 0 ? '+' : '−'}${exact(Math.abs(todayChange))} today).`,
     `Stock and crypto prices from Yahoo Finance, last updated ${s.pricesUpdatedAt ? s.pricesUpdatedAt.slice(0, 16).replace('T', ' ') + ' UTC' : 'never'}. Alternatives and cash are valued manually; cash with an APY grows daily.`,
     '',
+    '## Net worth over time',
+    historySummary(s),
+    '',
     '## Portfolios and holdings',
     `Each portfolio has a type that decides how its holdings are valued: ${assetKinds.map((k) => `${k} (${kindInfo[k]})`).join('; ')}.`,
     ...groups,
     '',
     '## Freedom plan',
-    planDetail(s.assumptions, net),
+    planDetail(s.assumptions, s.holdings),
     '',
     '## Plan assumptions (change with update_plan)',
-    'All plan amounts are in today\'s dollars. Returns are simulated 400 times with the given average and yearly swings.',
+    `All plan amounts are in today's dollars. Returns are simulated 400 times. Cash (${Math.round(cashMix(s.holdings).sharePct)}% of the portfolio) grows at its holdings' own weighted APY of ${+cashMix(s.holdings).apyPct.toFixed(2)}% with no swings; everything else uses returnPct and volatilityPct.`,
     assumptionsText(s.assumptions),
     '',
     '## Distributions',
@@ -192,10 +217,9 @@ export const tools: Tool[] = [
     },
     run: ({ whatIf }) => {
       const s = getState()
-      const net = netWorthOf(s.holdings)
-      if (!whatIf || !Object.keys(whatIf).length) return planDetail(s.assumptions, net)
+      if (!whatIf || !Object.keys(whatIf).length) return planDetail(s.assumptions, s.holdings)
       const tried = { ...s.assumptions, ...whatIf }
-      return `Current plan: ${freedomLine(s.assumptions, net)}\n\nWith ${Object.entries(whatIf).map(([k, v]) => `${k} = ${v}`).join(', ')} (not saved):\n${planDetail(tried, net)}`
+      return `Current plan: ${freedomLine(s.assumptions, s.holdings)}\n\nWith ${Object.entries(whatIf).map(([k, v]) => `${k} = ${v}`).join(', ')} (not saved):\n${planDetail(tried, s.holdings)}`
     },
   }),
   tool({
@@ -206,11 +230,11 @@ export const tools: Tool[] = [
     run: (args, by) => {
       const s = getState()
       const changed = planSliders.filter((p) => args[p.key] !== undefined && args[p.key] !== s.assumptions[p.key])
-      if (!changed.length) return 'Nothing changed.\n' + freedomLine(s.assumptions, netWorthOf(s.holdings))
+      if (!changed.length) return 'Nothing changed.\n' + freedomLine(s.assumptions, s.holdings)
       for (const p of changed) s.assumptions[p.key] = args[p.key]!
       log(s, by, `set ${changed.map((p) => `${p.label.toLowerCase()} to ${formatSlider(p, s.assumptions[p.key])}`).join(', ')}`, 'plan:' + changed.map((p) => p.key).join(','))
       save()
-      return `Saved. ${freedomLine(s.assumptions, netWorthOf(s.holdings))}`
+      return `Saved. ${freedomLine(s.assumptions, s.holdings)}`
     },
   }),
   tool({
@@ -234,7 +258,7 @@ export const tools: Tool[] = [
       } else Object.assign(p, { label: label ?? p.label, year: year ?? p.year, amount: amount ?? p.amount })
       log(s, by, `set ${p.label} to ${exact(p.amount)} in ${p.year}`, 'purchase:' + p.id)
       save()
-      return `Saved purchase ${p.id}. ${freedomLine(s.assumptions, netWorthOf(s.holdings))}`
+      return `Saved purchase ${p.id}. ${freedomLine(s.assumptions, s.holdings)}`
     },
   }),
   tool({
@@ -248,7 +272,7 @@ export const tools: Tool[] = [
       s.assumptions.purchases = s.assumptions.purchases.filter((x) => x !== p)
       log(s, by, `removed ${p.label}`)
       save()
-      return `Removed ${p.label}. ${freedomLine(s.assumptions, netWorthOf(s.holdings))}`
+      return `Removed ${p.label}. ${freedomLine(s.assumptions, s.holdings)}`
     },
   }),
   tool({
@@ -301,7 +325,7 @@ export const tools: Tool[] = [
       s.holdings.push(h)
       log(s, by, `added ${h.name} to ${portfolio.name} at ${exact(h.value)}`)
       save()
-      return `Added ${h.id}. Net worth is now ${exact(netWorthOf(s.holdings))}. ${freedomLine(s.assumptions, netWorthOf(s.holdings))}`
+      return `Added ${h.id}. Net worth is now ${exact(netWorthOf(s.holdings))}. ${freedomLine(s.assumptions, s.holdings)}`
     },
   }),
   tool({
@@ -383,6 +407,18 @@ export const tools: Tool[] = [
     },
   }),
   tool({
+    name: 'get_net_worth_history',
+    description: 'Daily net worth history as a CSV of date,value. Pass from and to (YYYY-MM-DD) to limit the range.',
+    input: {
+      from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+      to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    },
+    run: ({ from, to }) => {
+      const rows = (getState().history ?? []).filter((x) => (!from || x.date >= from) && (!to || x.date <= to))
+      return ['date,value', ...rows.map((x) => `${x.date},${x.value}`)].join('\n')
+    },
+  }),
+  tool({
     name: 'add_portfolio',
     description: `Create a portfolio to group holdings, such as "Retirement accounts" or "Real estate". Its type decides how holdings in it are valued: ${assetKinds.map((k) => `${k}: ${kindInfo[k]}`).join('; ')}.`,
     input: { name: z.string(), kind },
@@ -459,12 +495,45 @@ export async function refreshPrices() {
   ].join(' ')
 }
 
-/** Refreshes prices if they haven't been updated today (local time). */
+/**
+ * Fills in a year of daily net worth from price history when there is little recorded history.
+ * It assumes today's quantities were held all year; manual holdings count at today's value,
+ * less interest for cash with an APY.
+ */
+export async function backfillHistory() {
+  if ((getState().history?.length ?? 0) > 7) return
+  const priced = getState().holdings.filter((h) => h.symbol)
+  const series = await Promise.all(priced.map((h) => fetchHistory(h.symbol!, h.kind)))
+  const s = getState()
+  const start = series.reduce((d, m) => (m.keys().next().value! > d ? m.keys().next().value! : d), '')
+  const dates = [...new Set(series.flatMap((m) => [...m.keys()]))].filter((d) => d >= start && d < today()).sort()
+  const last = new Map<number, number>()
+  const recorded = new Map((s.history ?? []).map((x) => [x.date, x.value]))
+  for (const date of dates) {
+    if (recorded.has(date)) continue
+    let v = 0
+    priced.forEach((h, i) => {
+      const c = series[i].get(date)
+      if (c) last.set(i, c)
+      v += (h.quantity ?? 0) * (last.get(i) ?? 0)
+    })
+    for (const h of s.holdings)
+      if (!h.symbol) {
+        const years = (Date.parse(today()) - Date.parse(date)) / (365 * 86400000)
+        v += h.interestPct ? h.value / Math.pow(1 + h.interestPct / 100, years) : h.value
+      }
+    recorded.set(date, Math.round(v))
+  }
+  s.history = [...recorded].map(([date, value]) => ({ date, value })).sort((x, y) => x.date.localeCompare(y.date))
+  save()
+}
+
+/** Refreshes prices if they haven't been updated today (local time), and fills in missing history. */
 export async function refreshIfStale() {
   const last = getState().pricesUpdatedAt
-  if (last && new Date(last).toDateString() === new Date().toDateString()) return
   try {
-    console.error(await refreshPrices())
+    if (!last || new Date(last).toDateString() !== new Date().toDateString()) console.error(await refreshPrices())
+    await backfillHistory()
   } catch (e) {
     console.error('Price refresh failed:', (e as Error).message)
   }

@@ -62,6 +62,8 @@ export function HoldingScreen({ holding: h, state, act }: { holding: Holding; st
         </span>
       </section>
 
+      {manual && <InterestControl holding={h} act={act} />}
+
       <section className="card stack-sm">
         <ValueChart values={valueHistory(h)} />
         <p className="caption">
@@ -187,5 +189,44 @@ export function HoldingScreen({ holding: h, state, act }: { holding: Holding; st
         {manual ? (h.kind === 'Cash' ? `Or ask Claude: “My ${h.name} balance is $45,000.”` : `Or ask Claude: “${h.name} is now worth $105k” or “Log a $2,250 distribution from ${h.name}.”`) : `Ask Claude: “I bought 10 more ${h.symbol}.”`}
       </p>
     </div>
+  )
+}
+
+/** The interest rate on a cash or other manual holding, always visible and saved as you let go. */
+function InterestControl({ holding: h, act }: { holding: Holding; act: Act }) {
+  const [draft, setDraft] = useState<number | null>(null)
+  const apy = draft ?? h.interestPct ?? 0
+  const save = async () => {
+    if (draft === null) return
+    if (draft !== (h.interestPct ?? 0)) await act('update_holding', { id: h.id, interestPct: draft })
+    setDraft(null)
+  }
+  return (
+    <section className="card stack-xs">
+      <label className="slider">
+        <span className="row-between">
+          <span>Interest rate</span>
+          <span className="num strong apy">{apy ? `${+apy.toFixed(2)}% APY` : 'None'}</span>
+        </span>
+        <input
+          type="range"
+          className="range"
+          min={0}
+          max={8}
+          step={0.05}
+          value={apy}
+          onChange={(e) => setDraft(Number(e.target.value))}
+          onPointerUp={save}
+          onKeyUp={save}
+          onBlur={save}
+          style={{ '--fill': `${(apy / 8) * 100}%` } as React.CSSProperties}
+        />
+        <span className="caption">
+          {apy
+            ? `Adds about ${exact((h.value * apy) / 100)} a year to this balance, daily. The plan grows cash at this rate, not the market return.`
+            : 'Set a rate for savings accounts. Interest is added daily, and the plan grows cash at it.'}
+        </span>
+      </label>
+    </section>
   )
 }

@@ -1,4 +1,4 @@
-import type { Assumptions } from './model.ts'
+import type { Assumptions, Holding } from './model.ts'
 
 // Monte Carlo freedom plan. Every amount is in today's dollars: returns are made real by
 // dividing out inflation, so spending stays constant in purchasing power.
@@ -21,13 +21,30 @@ function draws(runs: number, years: number) {
   return Array.from({ length: runs }, () => Float64Array.from({ length: years }, gauss))
 }
 
-export function makePlan(a: Assumptions, netWorth: number, startYear: number) {
+/** Cash holdings' share of the portfolio and their value-weighted APY, in percent. Cash without an APY earns 0%. */
+export function cashMix(holdings: Holding[]) {
+  const net = netWorthOf(holdings)
+  const cash = holdings.filter((h) => h.kind === 'Cash')
+  const total = netWorthOf(cash)
+  return {
+    sharePct: net > 0 ? (total / net) * 100 : 0,
+    apyPct: total > 0 ? cash.reduce((s, h) => s + h.value * (h.interestPct ?? 0), 0) / total : 0,
+  }
+}
+
+export function makePlan(a: Assumptions, holdings: Holding[], startYear: number) {
+  const netWorth = netWorthOf(holdings)
   const years = a.planToAge - a.currentAge
   const z = draws(RUNS, years)
   const nominal = a.returnPct / 100
   const vol = a.volatilityPct / 100
   const inflation = a.inflationPct / 100
-  const ret = (run: number, i: number) => Math.max(-0.9, (1 + nominal + vol * z[run][i]) / (1 + inflation) - 1)
+  // Cash grows at its own APY with no swings; the rest at the market return. The mix stays as it is today.
+  const cash = cashMix(holdings)
+  const c = cash.sharePct / 100
+  const cashReal = (1 + cash.apyPct / 100) / (1 + inflation) - 1
+  const ret = (run: number, i: number) =>
+    Math.max(-0.9, (1 - c) * ((1 + nominal + vol * z[run][i]) / (1 + inflation) - 1) + c * cashReal)
 
   // Money in (+) or out (−) in year i when you stop after `stop` years, before spending.
   const flow = (i: number, stop: number) => {
@@ -98,6 +115,8 @@ export function makePlan(a: Assumptions, netWorth: number, startYear: number) {
   return {
     runs: RUNS,
     startYear,
+    /** Cash share of the portfolio and its weighted APY, both in percent. */
+    cash,
     /** Withdrawal rate in percent, or 0 in auto mode. */
     withdrawalPct: a.withdrawalPct ?? 0,
     /** Median portfolio in today's dollars when you stop, indexed by years until you stop. */
