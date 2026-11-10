@@ -36,7 +36,7 @@ export type Holding = {
   valuedOn?: string
   distributions: Distribution[]
   note?: string
-  /** Yearly interest (APY, in percent) that accrues daily into value, for cash and other manual holdings. */
+  /** Yearly interest (APY, in percent) that accrues daily into value. Cash holdings only. */
   interestPct?: number
   /** Date (YYYY-MM-DD) interest has been added through, and the total added so far. */
   accruedOn?: string
@@ -54,7 +54,12 @@ export type Assumptions = {
   planToAge: number
   /** Share of simulated markets in which the money must last, in percent. */
   confidencePct: number
+  /** Yearly return before inflation for every portfolio type without its own return below. */
   returnPct: number
+  /** Optional returns for one portfolio type; unset means returnPct. Cash grows at its holdings' APY instead. */
+  stocksReturnPct?: number
+  cryptoReturnPct?: number
+  alternativesReturnPct?: number
   volatilityPct: number
   inflationPct: number
   /** Saved each year until you stop working. */
@@ -96,7 +101,16 @@ export type SliderSpec = {
   step: number
   unit: '$/yr' | '%' | 'yrs' | 'age'
   hint?: string
+  /** Unset means it follows returnPct. Set it to null to go back to that default. */
+  defaultsToReturn?: true
 }
+
+/** The plan's return for each portfolio type other than cash, which grows at its own APY. */
+export const returnKeys = { Stocks: 'stocksReturnPct', Crypto: 'cryptoReturnPct', Alternatives: 'alternativesReturnPct' } as const
+export type ReturnKind = keyof typeof returnKeys
+
+/** A slider's current value; per-type returns fall back to returnPct. */
+export const sliderValue = (a: Assumptions, s: Pick<SliderSpec, 'key' | 'defaultsToReturn'>) => a[s.key] ?? (s.defaultsToReturn ? a.returnPct : 0)
 
 /** Every plan assumption the app shows as a slider. The agent's update_plan tool uses the same list and ranges. */
 export const planSliders: SliderSpec[] = [
@@ -111,7 +125,18 @@ export const planSliders: SliderSpec[] = [
   { key: 'currentAge', label: 'Current age', group: 'Goal', min: 18, max: 55, step: 1, unit: 'age' },
   { key: 'planToAge', label: 'Money lasts until', group: 'Goal', min: 80, max: 105, step: 1, unit: 'age' },
   { key: 'confidencePct', label: 'Confidence', group: 'Goal', min: 50, max: 99, step: 1, unit: '%', hint: 'Share of simulated markets where the money lasts' },
-  { key: 'returnPct', label: 'Average return', group: 'Markets', min: 0, max: 12, step: 0.25, unit: '%', hint: 'Yearly, before inflation. Cash grows at its own APY instead.' },
+  { key: 'returnPct', label: 'Average return', group: 'Markets', min: 0, max: 12, step: 0.25, unit: '%', hint: 'Yearly, before inflation. Used for every portfolio type without its own return. Cash grows at its own APY instead.' },
+  ...(Object.entries(returnKeys) as [ReturnKind, SliderKey][]).map(([kind, key]): SliderSpec => ({
+    key,
+    label: `${kind} return`,
+    group: 'Markets',
+    min: 0,
+    max: 20,
+    step: 0.25,
+    unit: '%',
+    hint: `Yearly, before inflation, for ${kind} portfolios. Follows the average return until you set it.`,
+    defaultsToReturn: true,
+  })),
   { key: 'volatilityPct', label: 'Yearly swings', group: 'Markets', min: 0, max: 30, step: 1, unit: '%', hint: 'Standard deviation; a stock index is about 15%' },
   { key: 'inflationPct', label: 'Inflation', group: 'Markets', min: 0, max: 8, step: 0.25, unit: '%' },
 ]
@@ -160,7 +185,7 @@ export const today = () => new Date().toISOString().slice(0, 10)
 export function accrueInterest(s: State, on = today()) {
   let changed = false
   for (const h of s.holdings) {
-    if (!h.interestPct) continue
+    if (!h.interestPct || h.kind !== 'Cash') continue
     const from = h.accruedOn ?? h.valuedOn ?? on
     const days = (Date.parse(on) - Date.parse(from)) / 86400000
     if (days <= 0) continue
@@ -198,6 +223,11 @@ export function migrate(s: State) {
     s.portfolios = structuredClone(defaultPortfolios)
     changed = true
   }
+  for (const h of s.holdings)
+    if (h.interestPct !== undefined && h.kind !== 'Cash') {
+      delete h.interestPct
+      changed = true
+    }
   for (const h of s.holdings)
     if (!h.portfolioId) {
       h.portfolioId = s.portfolios.find((p) => p.kind === h.kind)!.id

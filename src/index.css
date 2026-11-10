@@ -586,7 +586,7 @@ a.list-row:active {
   fill: var(--muted);
   font-variant-numeric: tabular-nums;
 }
-.chart text.strong {
+.chart .strong {
   fill: var(--fg);
 }
 .chart .grid {
@@ -763,14 +763,18 @@ a.list-row:active {
   color: var(--accent);
 }
 
-.nw-chart {
+.scrub {
   touch-action: pan-y;
   cursor: crosshair;
 }
-.nw-chart .band {
+.nw .band {
   opacity: 0.6;
 }
-.nw-dot {
+.chart .hover-line {
+  stroke: var(--fg);
+  opacity: 0.25;
+}
+.scrub-dot {
   fill: var(--accent);
   stroke: var(--surface);
   stroke-width: 2;

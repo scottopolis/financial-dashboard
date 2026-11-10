@@ -35,7 +35,7 @@ export function AddScreen({ state, act }: { state: State; act: Act }) {
     if (creating) target = newName.trim()
     const args = priced
       ? { portfolio: target, name: name.trim() || symbol.trim().toUpperCase(), symbol: symbol.trim(), quantity: num(quantity) }
-      : { portfolio: target, name: name.trim(), value: num(value), ...(apy.trim() && num(apy) > 0 ? { interestPct: num(apy) } : {}) }
+      : { portfolio: target, name: name.trim(), value: num(value), ...(kind === 'Cash' && apy.trim() && num(apy) > 0 ? { interestPct: num(apy) } : {}) }
     const ok = await act('add_holding', { ...args, ...(cost.trim() ? { costBasis: num(cost) } : {}) })
     setBusy(false)
     if (ok) location.hash = '#/'
@@ -123,14 +123,14 @@ export function AddScreen({ state, act }: { state: State; act: Act }) {
                   <input inputMode="decimal" value={value} onChange={(e) => setValue(e.target.value)} placeholder="0" />
                 </span>
               </label>
-              <label className="field">
+              {kind === 'Cash' && <label className="field">
                 <span className="field-label">Interest rate</span>
                 <span className="input">
-                  <input inputMode="decimal" value={apy} onChange={(e) => setApy(e.target.value)} placeholder={kind === 'Cash' ? '4.1' : 'Optional'} />
+                  <input inputMode="decimal" value={apy} onChange={(e) => setApy(e.target.value)} placeholder="4.1" />
                   <span className="affix">% APY</span>
                 </span>
                 <span className="caption">Added to the balance daily. Leave empty for none.</span>
-              </label>
+              </label>}
             </>
           )}
           <label className="field">

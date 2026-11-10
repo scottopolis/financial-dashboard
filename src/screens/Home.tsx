@@ -18,7 +18,7 @@ export function Home({ state }: { state: State }) {
 
   return (
     <div className="stack-lg">
-      <section className="stack-sm">
+      <section className="card stack-md">
         <NetWorthChart history={state.history ?? []} netWorth={netWorth} today={today} />
         <div className="alloc">
           {funded.map((g) => (

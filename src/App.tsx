@@ -21,7 +21,6 @@ function parseRoute(): Route {
 const tabs = [
   { href: '#/', label: 'Portfolio', route: 'home', icon: 'M3 12l9-8 9 8M5 10v10h14V10' },
   { href: '#/plan', label: 'Plan', route: 'plan', icon: 'M4 19h16M7 16V9m5 7V5m5 11v-4' },
-  { href: '#/add', label: 'Add', route: 'add', icon: 'M12 5v14M5 12h14' },
   { href: '#/agent', label: 'Agent', route: 'agent', icon: 'M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8zM18 15l.9 2.1L21 18l-2.1.9L18 21l-.9-2.1L15 18l2.1-.9z' },
 ] as const
 

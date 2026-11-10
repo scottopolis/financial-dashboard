@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { formatSlider, planSliders, START_YEAR, type Assumptions, type SliderKey, type State } from '../model.ts'
+import { formatSlider, planSliders, returnKeys, sliderValue, START_YEAR, type Assumptions, type SliderKey, type State } from '../model.ts'
 import { exact, makePlan, netWorthOf } from '../plan.ts'
 import type { Act } from '../api.ts'
 import { FreedomCard } from './FreedomCard'
@@ -9,8 +9,10 @@ const groups = ['Savings and income', 'Goal', 'Markets'] as const
 export function PlanScreen({ state, act }: { state: State; act: Act }) {
   // Slider moves show instantly from a local draft; they save through update_plan after a short pause,
   // the same tool the agent uses.
-  const [draft, setDraft] = useState<Partial<Record<SliderKey, number>>>({})
-  const pending = useRef<Partial<Record<SliderKey, number>>>({})
+  // null sends a per-type return back to following the average return.
+  type Draft = Partial<Record<SliderKey, number | null>>
+  const [draft, setDraft] = useState<Draft>({})
+  const pending = useRef<Draft>({})
   const timer = useRef<number | undefined>(undefined)
   // Leaving the page saves any slider move still waiting on its pause.
   const actRef = useRef(act)
@@ -25,11 +27,13 @@ export function PlanScreen({ state, act }: { state: State; act: Act }) {
     [],
   )
 
-  const a: Assumptions = { ...state.assumptions, ...draft }
+  const a = { ...state.assumptions, ...draft } as Assumptions
   const netWorth = netWorthOf(state.holdings)
   const key = JSON.stringify(a)
   const plan = useMemo(() => makePlan(JSON.parse(key), state.holdings, START_YEAR), [key, state.holdings])
-  const move = (key: SliderKey, v: number) => {
+  // Per-type returns show only for types you hold.
+  const held = new Set<SliderKey>(plan.mix.filter((m) => m.sharePct > 0).map((m) => returnKeys[m.kind as keyof typeof returnKeys]))
+  const move = (key: SliderKey, v: number | null) => {
     setDraft((d) => ({ ...d, [key]: v }))
     pending.current[key] = v
     clearTimeout(timer.current)
@@ -54,26 +58,44 @@ export function PlanScreen({ state, act }: { state: State; act: Act }) {
           <h2 className="section">{g}</h2>
           <div className="card sliders">
             {planSliders
-              .filter((s) => s.group === g)
-              .map((s) => (
-                <label key={s.key} className={s.key === 'extraSavings' ? 'slider featured' : 'slider'}>
-                  <span className="row-between">
-                    <span>{s.label}</span>
-                    <span className="num strong">{formatSlider(s, a[s.key])}</span>
-                  </span>
-                  <input
-                    type="range"
-                    className="range"
-                    min={s.min}
-                    max={s.max}
-                    step={s.step}
-                    value={a[s.key]}
-                    onChange={(e) => move(s.key, Number(e.target.value))}
-                    style={{ '--fill': `${((a[s.key] - s.min) / (s.max - s.min)) * 100}%` } as React.CSSProperties}
-                  />
-                  {s.hint && <span className="caption">{s.hint}</span>}
-                </label>
-              ))}
+              .filter((s) => s.group === g && (!s.defaultsToReturn || held.has(s.key)))
+              .map((s) => {
+                const v = sliderValue(a, s)
+                const isDefault = s.defaultsToReturn && a[s.key] == null
+                return (
+                  <label key={s.key} className={s.key === 'extraSavings' ? 'slider featured' : 'slider'}>
+                    <span className="row-between">
+                      <span>{s.label}</span>
+                      <span className="num strong">
+                        {isDefault && <span className="muted">Default </span>}
+                        {formatSlider(s, v)}
+                      </span>
+                    </span>
+                    <input
+                      type="range"
+                      className="range"
+                      min={s.min}
+                      max={s.max}
+                      step={s.step}
+                      value={v}
+                      onChange={(e) => move(s.key, Number(e.target.value))}
+                      style={{ '--fill': `${((v - s.min) / (s.max - s.min)) * 100}%` } as React.CSSProperties}
+                    />
+                    {s.defaultsToReturn ? (
+                      <span className="row-between caption">
+                        <span>{isDefault ? 'Follows the average return.' : 'Yearly, before inflation.'}</span>
+                        {!isDefault && (
+                          <button type="button" className="link" onClick={() => move(s.key, null)}>
+                            Use default
+                          </button>
+                        )}
+                      </span>
+                    ) : (
+                      s.hint && <span className="caption">{s.hint}</span>
+                    )}
+                  </label>
+                )
+              })}
           </div>
         </section>
       ))}

@@ -62,7 +62,7 @@ export function HoldingScreen({ holding: h, state, act }: { holding: Holding; st
         </span>
       </section>
 
-      {manual && <InterestControl holding={h} act={act} />}
+      {h.kind === 'Cash' && <InterestControl holding={h} act={act} />}
 
       <section className="card stack-sm">
         <ValueChart values={valueHistory(h)} />
@@ -128,13 +128,13 @@ export function HoldingScreen({ holding: h, state, act }: { holding: Holding; st
                     <input inputMode="decimal" autoFocus value={draftValue} onChange={(e) => setDraftValue(e.target.value)} />
                   </span>
                 </label>
-                <label className="field grow">
+                {h.kind === 'Cash' && <label className="field grow">
                   <span className="field-label">Interest</span>
                   <span className="input">
                     <input inputMode="decimal" value={draftApy} onChange={(e) => setDraftApy(e.target.value)} placeholder="None" />
                     <span className="affix">% APY</span>
                   </span>
-                </label>
+                </label>}
                 <button type="submit" className="btn primary">
                   Save
                 </button>
@@ -192,7 +192,7 @@ export function HoldingScreen({ holding: h, state, act }: { holding: Holding; st
   )
 }
 
-/** The interest rate on a cash or other manual holding, always visible and saved as you let go. */
+/** The interest rate on a cash holding, always visible and saved as you let go. */
 function InterestControl({ holding: h, act }: { holding: Holding; act: Act }) {
   const [draft, setDraft] = useState<number | null>(null)
   const apy = draft ?? h.interestPct ?? 0
@@ -213,7 +213,7 @@ function InterestControl({ holding: h, act }: { holding: Holding; act: Act }) {
           className="range"
           min={0}
           max={8}
-          step={0.05}
+          step={0.25}
           value={apy}
           onChange={(e) => setDraft(Number(e.target.value))}
           onPointerUp={save}
@@ -222,9 +222,8 @@ function InterestControl({ holding: h, act }: { holding: Holding; act: Act }) {
           style={{ '--fill': `${(apy / 8) * 100}%` } as React.CSSProperties}
         />
         <span className="caption">
-          {apy
-            ? `Adds about ${exact((h.value * apy) / 100)} a year to this balance, daily. The plan grows cash at this rate, not the market return.`
-            : 'Set a rate for savings accounts. Interest is added daily, and the plan grows cash at it.'}
+          {apy ? `Adds about ${exact((h.value * apy) / 100)} a year to this balance, daily. ` : 'Set a rate for savings accounts. Interest is added daily. '}
+          The plan grows cash at this rate, not the market return.
         </span>
       </label>
     </section>

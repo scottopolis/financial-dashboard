@@ -5,6 +5,7 @@ import {
   kindInfo,
   formatSlider,
   planSliders,
+  sliderValue,
   START_YEAR,
   today,
   type Assumptions,
@@ -13,7 +14,7 @@ import {
   type SliderKey,
   type State,
 } from '../src/model.ts'
-import { cashMix, exact, makePlan, MAX_STOP, netWorthOf } from '../src/plan.ts'
+import { exact, makePlan, MAX_STOP, netWorthOf, returnMix } from '../src/plan.ts'
 import { getState, save } from './store.ts'
 import { fetchHistory, fetchQuote } from './prices.ts'
 
@@ -77,7 +78,10 @@ function planDetail(a: Assumptions, holdings: Holding[]) {
 
 function assumptionsText(a: Assumptions) {
   return [
-    ...planSliders.map((s) => `- ${s.key}: ${formatSlider(s, a[s.key])} (${s.label}; range ${s.min}–${s.max} in steps of ${s.step}${s.key === 'withdrawalPct' ? '; 0 means auto' : ''})`),
+    ...planSliders.map(
+      (s) =>
+        `- ${s.key}: ${s.defaultsToReturn && a[s.key] == null ? 'not set, follows returnPct' : formatSlider(s, sliderValue(a, s))} (${s.label}; range ${s.min}–${s.max} in steps of ${s.step}${s.key === 'withdrawalPct' ? '; 0 means auto' : ''}${s.defaultsToReturn ? '; null goes back to following returnPct' : ''})`,
+    ),
     '',
     'Big purchases (one-time costs, in today\'s dollars):',
     ...(a.purchases.length ? a.purchases.map((p) => `- ${p.id}: ${p.label}, ${exact(p.amount)} in ${p.year}`) : ['- none']),
@@ -154,7 +158,9 @@ export function overview(s: State = getState()) {
     planDetail(s.assumptions, s.holdings),
     '',
     '## Plan assumptions (change with update_plan)',
-    `All plan amounts are in today's dollars. Returns are simulated 400 times. Cash (${Math.round(cashMix(s.holdings).sharePct)}% of the portfolio) grows at its holdings' own weighted APY of ${+cashMix(s.holdings).apyPct.toFixed(2)}% with no swings; everything else uses returnPct and volatilityPct.`,
+    `All plan amounts are in today's dollars. Returns are simulated 400 times. Each portfolio type grows at its own yearly return, keeping today's mix: ${returnMix(s.assumptions, s.holdings)
+      .map((m) => `${m.kind} ${Math.round(m.sharePct)}% of the portfolio at ${+m.returnPct.toFixed(2)}%${m.kind === 'Cash' ? " (its holdings' weighted APY, no swings)" : m.custom ? '' : ' (returnPct)'}`)
+      .join('; ')}. Everything except cash swings by volatilityPct a year.`,
     assumptionsText(s.assumptions),
     '',
     '## Distributions',
@@ -167,16 +173,16 @@ export function overview(s: State = getState()) {
 }
 
 const sliderShape = Object.fromEntries(
-  planSliders.map((s) => [
-    s.key,
-    z
-      .number()
-      .min(s.min)
-      .max(s.max)
-      .optional()
-      .describe(`${s.label}${s.hint ? ` (${s.hint})` : ''}. Unit: ${s.unit}.`),
-  ]),
-) as Record<SliderKey, z.ZodOptional<z.ZodNumber>>
+  planSliders.map((s) => {
+    const n = z.number().min(s.min).max(s.max)
+    return [
+      s.key,
+      (s.defaultsToReturn ? n.nullable() : n)
+        .optional()
+        .describe(`${s.label}${s.hint ? ` (${s.hint})` : ''}. Unit: ${s.unit}.${s.defaultsToReturn ? ' Pass null to follow returnPct again.' : ''}`),
+    ]
+  }),
+) as Record<SliderKey, z.ZodOptional<z.ZodNullable<z.ZodNumber>>>
 
 const kind = z.enum(assetKinds as [string, ...string[]])
 const interestPct = z.number().min(0).max(25).describe('Yearly interest (APY) in percent, such as 4.1. It is added to the value daily.')
@@ -218,7 +224,7 @@ export const tools: Tool[] = [
     run: ({ whatIf }) => {
       const s = getState()
       if (!whatIf || !Object.keys(whatIf).length) return planDetail(s.assumptions, s.holdings)
-      const tried = { ...s.assumptions, ...whatIf }
+      const tried = { ...s.assumptions, ...whatIf } as Assumptions
       return `Current plan: ${freedomLine(s.assumptions, s.holdings)}\n\nWith ${Object.entries(whatIf).map(([k, v]) => `${k} = ${v}`).join(', ')} (not saved):\n${planDetail(tried, s.holdings)}`
     },
   }),
@@ -229,10 +235,18 @@ export const tools: Tool[] = [
     input: sliderShape,
     run: (args, by) => {
       const s = getState()
-      const changed = planSliders.filter((p) => args[p.key] !== undefined && args[p.key] !== s.assumptions[p.key])
+      // null clears a per-type return, so it follows returnPct again.
+      const want = (p: (typeof planSliders)[number]) => args[p.key] ?? undefined
+      const changed = planSliders.filter((p) => args[p.key] !== undefined && want(p) !== s.assumptions[p.key])
       if (!changed.length) return 'Nothing changed.\n' + freedomLine(s.assumptions, s.holdings)
-      for (const p of changed) s.assumptions[p.key] = args[p.key]!
-      log(s, by, `set ${changed.map((p) => `${p.label.toLowerCase()} to ${formatSlider(p, s.assumptions[p.key])}`).join(', ')}`, 'plan:' + changed.map((p) => p.key).join(','))
+      const a = s.assumptions as Record<SliderKey, number | undefined>
+      for (const p of changed) {
+        if (want(p) === undefined) delete a[p.key]
+        else a[p.key] = want(p)
+      }
+      const said = (p: (typeof planSliders)[number]) =>
+        a[p.key] === undefined ? `${p.label.toLowerCase()} back to the average return` : `${p.label.toLowerCase()} to ${formatSlider(p, sliderValue(s.assumptions, p))}`
+      log(s, by, `set ${changed.map(said).join(', ')}`, 'plan:' + changed.map((p) => p.key).join(','))
       save()
       return `Saved. ${freedomLine(s.assumptions, s.holdings)}`
     },
@@ -278,7 +292,7 @@ export const tools: Tool[] = [
   tool({
     name: 'add_holding',
     description:
-      'Add an investment to a portfolio. In a Stocks or Crypto portfolio pass symbol and quantity; the current price is looked up (pass price only to override it), and it updates daily after that. In an Alternatives or Cash portfolio pass value, and for savings accounts interestPct.',
+      'Add an investment to a portfolio. In a Stocks or Crypto portfolio pass symbol and quantity; the current price is looked up (pass price only to override it), and it updates daily after that. In an Alternatives or Cash portfolio pass value; in a Cash portfolio also interestPct for savings accounts.',
     input: {
       portfolio: z.string().describe('Portfolio id or name, from get_overview.'),
       name: z.string(),
@@ -297,6 +311,7 @@ export const tools: Tool[] = [
       if (priced && a.symbol === undefined) throw new Error(`${portfolio.name} is a ${k} portfolio, so pass symbol and quantity.`)
       if (!priced && a.symbol !== undefined) throw new Error(`${portfolio.name} is valued manually, so pass value instead of symbol.`)
       if (priced && a.quantity === undefined) throw new Error('A holding with a symbol needs quantity.')
+      if (a.interestPct && k !== 'Cash') throw new Error(`Only cash holdings earn interest. ${k} holdings grow at the plan's ${k.toLowerCase()} return; set it with update_plan.`)
       let dayChangePct = 0
       if (priced && a.price === undefined) {
         const q = await fetchQuote(a.symbol!.toUpperCase(), k).catch((e) => {
@@ -331,7 +346,7 @@ export const tools: Tool[] = [
   tool({
     name: 'update_holding',
     description:
-      'Change a holding by id: record a new value or balance for an alternative or cash holding (value), set its interest rate (interestPct, 0 to stop), change shares (quantity) or price for stocks and crypto, move it to another portfolio of the same type, or edit name, cost basis, or note.',
+      'Change a holding by id: record a new value or balance for an alternative or cash holding (value), set the interest rate of a cash holding (interestPct, 0 to stop), change shares (quantity) or price for stocks and crypto, move it to another portfolio of the same type, or edit name, cost basis, or note.',
     input: {
       id: z.string(),
       name: z.string().optional(),
@@ -355,8 +370,10 @@ export const tools: Tool[] = [
         if (isPriced(p.kind) !== isPriced(h.kind)) throw new Error(`Can't move ${h.name} into ${p.name}: one is priced by symbol and the other valued manually.`)
         h.portfolioId = p.id
         h.kind = p.kind
+        if (h.kind !== 'Cash') delete h.interestPct
       }
-      if (patch.interestPct !== undefined && !h.symbol) {
+      if (patch.interestPct && h.kind !== 'Cash') throw new Error(`Only cash holdings earn interest. ${h.kind} holdings grow at the plan's ${h.kind.toLowerCase()} return; set it with update_plan.`)
+      if (patch.interestPct !== undefined && h.kind === 'Cash') {
         h.interestPct = patch.interestPct || undefined
         h.accruedOn = today()
       }

@@ -1,4 +1,4 @@
-import type { Assumptions, Holding } from './model.ts'
+import { assetKinds, returnKeys, type Assumptions, type Holding } from './model.ts'
 
 // Monte Carlo freedom plan. Every amount is in today's dollars: returns are made real by
 // dividing out inflation, so spending stays constant in purchasing power.
@@ -21,28 +21,44 @@ function draws(runs: number, years: number) {
   return Array.from({ length: runs }, () => Float64Array.from({ length: years }, gauss))
 }
 
-/** Cash holdings' share of the portfolio and their value-weighted APY, in percent. Cash without an APY earns 0%. */
-export function cashMix(holdings: Holding[]) {
+/**
+ * How the plan grows each portfolio type: its share of the portfolio and its yearly return, both in percent.
+ * Cash earns its holdings' value-weighted APY; other types use their own return when set, else returnPct.
+ */
+export function returnMix(a: Assumptions, holdings: Holding[]) {
   const net = netWorthOf(holdings)
-  const cash = holdings.filter((h) => h.kind === 'Cash')
-  const total = netWorthOf(cash)
-  return {
-    sharePct: net > 0 ? (total / net) * 100 : 0,
-    apyPct: total > 0 ? cash.reduce((s, h) => s + h.value * (h.interestPct ?? 0), 0) / total : 0,
-  }
+  return assetKinds.map((kind) => {
+    const hs = holdings.filter((h) => h.kind === kind)
+    const total = netWorthOf(hs)
+    const own = kind === 'Cash' ? undefined : a[returnKeys[kind]]
+    return {
+      kind,
+      sharePct: net > 0 ? (total / net) * 100 : 0,
+      returnPct:
+        kind === 'Cash'
+          ? total > 0
+            ? hs.reduce((t, h) => t + h.value * (h.interestPct ?? 0), 0) / total
+            : 0
+          : (own ?? a.returnPct),
+      /** False when the type follows returnPct. */
+      custom: own != null,
+    }
+  })
 }
 
 export function makePlan(a: Assumptions, holdings: Holding[], startYear: number) {
   const netWorth = netWorthOf(holdings)
   const years = a.planToAge - a.currentAge
   const z = draws(RUNS, years)
-  const nominal = a.returnPct / 100
   const vol = a.volatilityPct / 100
   const inflation = a.inflationPct / 100
-  // Cash grows at its own APY with no swings; the rest at the market return. The mix stays as it is today.
-  const cash = cashMix(holdings)
+  // Each type grows at its own return, and the mix stays as it is today. Cash has no swings; the
+  // rest share one market draw, so their blend is a weighted average return with volatilityPct swings.
+  const mix = returnMix(a, holdings)
+  const cash = mix.find((m) => m.kind === 'Cash')!
   const c = cash.sharePct / 100
-  const cashReal = (1 + cash.apyPct / 100) / (1 + inflation) - 1
+  const cashReal = (1 + cash.returnPct / 100) / (1 + inflation) - 1
+  const nominal = c < 1 ? mix.reduce((t, m) => t + (m.kind === 'Cash' ? 0 : m.sharePct * m.returnPct), 0) / 100 / 100 / (1 - c) : 0
   const ret = (run: number, i: number) =>
     Math.max(-0.9, (1 - c) * ((1 + nominal + vol * z[run][i]) / (1 + inflation) - 1) + c * cashReal)
 
@@ -115,8 +131,8 @@ export function makePlan(a: Assumptions, holdings: Holding[], startYear: number)
   return {
     runs: RUNS,
     startYear,
-    /** Cash share of the portfolio and its weighted APY, both in percent. */
-    cash,
+    /** Each portfolio type's share of the portfolio and the yearly return the plan grows it at, in percent. */
+    mix,
     /** Withdrawal rate in percent, or 0 in auto mode. */
     withdrawalPct: a.withdrawalPct ?? 0,
     /** Median portfolio in today's dollars when you stop, indexed by years until you stop. */

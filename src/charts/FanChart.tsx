@@ -1,9 +1,10 @@
 import { money, type Band } from '../plan.ts'
 import { useWidth } from '../useWidth'
+import { useScrub } from './useScrub'
 
 type Props = { bands: Band[]; stop: number; startYear: number; endAge: number; height?: number }
 
-/** The middle half of simulated portfolio balances by year, with the median as a line. */
+/** The middle half of simulated portfolio balances by year, with the median as a line. Hovering, dragging, or arrow keys show one year's numbers. */
 export function FanChart({ bands, stop, startYear, endAge, height = 180 }: Props) {
   const [ref, width] = useWidth<HTMLDivElement>()
   const w = Math.max(280, width)
@@ -13,6 +14,7 @@ export function FanChart({ bands, stop, startYear, endAge, height = 180 }: Props
   const bottom = 22
   const left = 48
   const years = bands.length - 1
+  const { hover, props } = useScrub(bands.length, (px) => ((px - left) / (w - left - 4)) * years, stop)
   const ymax = Math.max(...bands.map((b) => b.high)) * 1.05
   const x = (i: number) => left + (i / years) * (w - left - 4)
   const y = (v: number) => top + (1 - Math.min(v, ymax) / ymax) * (h - top - bottom)
@@ -32,7 +34,7 @@ export function FanChart({ bands, stop, startYear, endAge, height = 180 }: Props
   return (
     <div ref={ref}>
       {width > 0 && (
-        <svg className="chart" width={w} height={h} role="img" aria-label="Portfolio range by year">
+        <svg {...props} width={w} height={h} role="img" aria-label="Portfolio range by year">
           {ticks.map((v) => (
             <g key={v}>
               <line x1={left} x2={w} y1={y(v)} y2={y(v)} className={v ? 'grid' : 'axis'} />
@@ -44,9 +46,22 @@ export function FanChart({ bands, stop, startYear, endAge, height = 180 }: Props
           <path d={area} className="band" />
           <path d={line('mid')} className="median" />
           <line x1={x(stop)} x2={x(stop)} y1={16} y2={h - bottom} className="marker" />
-          <text x={Math.min(x(stop), w - 80) + 6} y={12} className="strong">
-            Stop {startYear + stop}
-          </text>
+          {hover === null ? (
+            <text x={Math.min(x(stop), w - 80) + 6} y={12} className="strong">
+              Stop {startYear + stop}
+            </text>
+          ) : (
+            <>
+              <line x1={x(hover)} x2={x(hover)} y1={16} y2={h - bottom} className="hover-line" />
+              <circle cx={x(hover)} cy={y(bands[hover].mid)} r={4} className="scrub-dot" />
+              <text x={0} y={12}>
+                <tspan className="strong">
+                  {startYear + hover}, age {endAge - years + hover}:
+                </tspan>{' '}
+                <tspan className="strong">{money(bands[hover].mid)}</tspan> typical, {money(bands[hover].low)}–{money(bands[hover].high)}
+              </text>
+            </>
+          )}
           <text x={x(0)} y={h - 4}>
             Now
           </text>
