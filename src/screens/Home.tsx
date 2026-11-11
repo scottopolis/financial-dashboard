@@ -1,11 +1,13 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
+import type { Act } from '../api.ts'
 import { ago, describe, START_YEAR, type State } from '../model.ts'
 import { exact, makePlan, money, netWorthOf, signedPct } from '../plan.ts'
 import { FreedomCard } from './FreedomCard'
 import { ChangeFeed } from './ChangeFeed'
 import { NetWorthChart } from '../charts/NetWorthChart'
 
-export function Home({ state }: { state: State }) {
+export function Home({ state, act }: { state: State; act: Act }) {
+  const [refreshing, setRefreshing] = useState(false)
   const { holdings, assumptions: a } = state
   const netWorth = netWorthOf(holdings)
   const plan = useMemo(() => makePlan(a, holdings, START_YEAR), [a, holdings])
@@ -41,9 +43,23 @@ export function Home({ state }: { state: State }) {
         <section className="stack-md">
           <div className="row-between">
             <span className="label">Portfolios</span>
-            <a className="link" href="#/add">
-              + Add
-            </a>
+            <span className="row">
+              <button
+                type="button"
+                className="link"
+                disabled={refreshing}
+                onClick={async () => {
+                  setRefreshing(true)
+                  await act('refresh_prices', {})
+                  setRefreshing(false)
+                }}
+              >
+                {refreshing ? 'Refreshing…' : '↻ Refresh prices'}
+              </button>
+              <a className="link" href="#/add">
+                + Add
+              </a>
+            </span>
           </div>
           {groups.map((g) => (
             <div key={g.id} className="stack-sm">

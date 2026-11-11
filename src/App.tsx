@@ -66,7 +66,7 @@ export default function App() {
   else if (route.name === 'holding') {
     const h = state.holdings.find((x) => x.id === route.id)
     screen = h ? <HoldingScreen holding={h} state={state} act={act} /> : <p className="muted">That holding was removed.</p>
-  } else screen = <Home state={state} />
+  } else screen = <Home state={state} act={act} />
 
   return (
     <>
