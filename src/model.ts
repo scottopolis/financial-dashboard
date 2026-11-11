@@ -49,6 +49,8 @@ export type Assumptions = {
   currentAge: number
   /** Yearly spending in retirement, in today's dollars. */
   retireSpending: number
+  /** How fast spending falls after 70, as an index into spendingDeclines: 0 none to 3 aggressive. */
+  spendingDecline: number
   /** Share of the portfolio withdrawn each year after you stop, in percent. 0 means auto: the most that lasts at confidencePct. */
   withdrawalPct: number
   planToAge: number
@@ -99,11 +101,26 @@ export type SliderSpec = {
   min: number
   max: number
   step: number
-  unit: '$/yr' | '%' | 'yrs' | 'age'
+  unit: '$/yr' | '%' | 'yrs' | 'age' | 'level'
   hint?: string
   /** Unset means it follows returnPct. Set it to null to go back to that default. */
   defaultsToReturn?: true
 }
+
+/**
+ * Real (after-inflation) retiree spending tends to fall with age: about 1% a year on average (Blanchett 2014),
+ * 1.7% for singles and 2.4% for couples (Hurd & Rohwedder, RAND 2023), fastest from about 75 to 84.
+ * Spending holds until DECLINE_FROM_AGE (or until you stop, if later), then falls by `pct` a year for
+ * DECLINE_YEARS, then holds, since healthcare costs keep rising late in life.
+ */
+export const spendingDeclines = [
+  { name: 'None', pct: 0 },
+  { name: 'Conservative', pct: 1 },
+  { name: 'Average', pct: 2 },
+  { name: 'Aggressive', pct: 3 },
+] as const
+export const DECLINE_FROM_AGE = 70
+export const DECLINE_YEARS = 15
 
 /** The plan's return for each portfolio type other than cash, which grows at its own APY. */
 export const returnKeys = { Stocks: 'stocksReturnPct', Crypto: 'cryptoReturnPct', Alternatives: 'alternativesReturnPct' } as const
@@ -121,6 +138,16 @@ export const planSliders: SliderSpec[] = [
   { key: 'socialSecurity', label: 'Social Security', group: 'Savings and income', min: 0, max: 60000, step: 1000, unit: '$/yr' },
   { key: 'socialSecurityAge', label: 'Social Security starts at', group: 'Savings and income', min: 62, max: 70, step: 1, unit: 'age' },
   { key: 'retireSpending', label: 'Spending in retirement', group: 'Goal', min: 20000, max: 300000, step: 5000, unit: '$/yr', hint: "In today's dollars" },
+  {
+    key: 'spendingDecline',
+    label: 'Spending drops after 70',
+    group: 'Goal',
+    min: 0,
+    max: 3,
+    step: 1,
+    unit: 'level',
+    hint: `Retirees tend to spend less as they age. From ${DECLINE_FROM_AGE} (or when you stop, if later), spending falls each year for ${DECLINE_YEARS} years, then holds. Levels 0–3: ${spendingDeclines.map((d) => (d.pct ? `${d.name} ${d.pct}%` : d.name)).join(', ')} a year.`,
+  },
   { key: 'withdrawalPct', label: 'Withdrawal rate', group: 'Goal', min: 0, max: 8, step: 0.5, unit: '%', hint: 'Share of your portfolio you take out each year after you stop. Auto finds the most that lasts at your confidence.' },
   { key: 'currentAge', label: 'Current age', group: 'Goal', min: 18, max: 55, step: 1, unit: 'age' },
   { key: 'planToAge', label: 'Money lasts until', group: 'Goal', min: 80, max: 105, step: 1, unit: 'age' },
@@ -143,6 +170,10 @@ export const planSliders: SliderSpec[] = [
 
 export function formatSlider(s: Pick<SliderSpec, 'unit' | 'key'>, v: number) {
   if (s.key === 'withdrawalPct' && !v) return 'Auto'
+  if (s.unit === 'level') {
+    const d = spendingDeclines[v] ?? spendingDeclines[0]
+    return d.pct ? `${d.name}, ${d.pct}%/yr` : d.name
+  }
   if (s.unit === '$/yr') return `$${Math.round(v).toLocaleString('en-US')}/yr`
   if (s.unit === '%') return `${+v.toFixed(2)}%`
   if (s.unit === 'yrs') return `${v} ${v === 1 ? 'year' : 'years'}`
@@ -219,6 +250,10 @@ export function migrate(s: State) {
     s.assumptions.withdrawalPct = 0
     changed = true
   }
+  if (s.assumptions.spendingDecline === undefined) {
+    s.assumptions.spendingDecline = 2
+    changed = true
+  }
   if (!s.portfolios) {
     s.portfolios = structuredClone(defaultPortfolios)
     changed = true
@@ -242,6 +277,7 @@ export const defaultAssumptions: Assumptions = {
   currentAge: 42,
   retireSpending: 80000,
   withdrawalPct: 0,
+  spendingDecline: 2,
   planToAge: 95,
   confidencePct: 85,
   returnPct: 7.5,

@@ -21,6 +21,10 @@ export function FreedomCard({ plan, assumptions: a, link }: { plan: Plan; assump
   const stop = picked ?? (plan.freeAt >= 0 ? plan.freeAt : 10)
   const spend = plan.spendByStop[stop]
   const lasts = Math.round(plan.lastsAt(stop) * 100)
+  const endAge = plan.declineEndsAt(stop)
+  const later = spend * plan.spendShareAt(stop, endAge)
+  // Spending eases with age, so say where it settles.
+  const easing = later < spend - 1 && endAge <= a.planToAge ? <>, easing to {money(later)} by {endAge}</> : null
 
   return (
     <section className="card stack-md">
@@ -36,12 +40,14 @@ export function FreedomCard({ plan, assumptions: a, link }: { plan: Plan; assump
         {plan.withdrawalPct ? (
           <>
             Stop working {yearsLabel(stop)}, in {START_YEAR + stop} at {a.currentAge + stop}, and withdrawing {plan.withdrawalPct}% gives
-            you <em>{money(spend)} a year</em>, lasting in {lasts}% of markets.
+            you <em>{money(spend)} a year</em>
+            {easing}, lasting in {lasts}% of markets.
           </>
         ) : (
           <>
             Stop working {yearsLabel(stop)}, in {START_YEAR + stop} at {a.currentAge + stop}, and you could spend{' '}
-            <em>{money(spend)} a year</em> for life.
+            <em>{money(spend)} a year</em>
+            {easing ?? ' for life'}.
           </>
         )}
       </p>

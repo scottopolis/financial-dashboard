@@ -1,4 +1,4 @@
-import { assetKinds, returnKeys, type Assumptions, type Holding } from './model.ts'
+import { assetKinds, DECLINE_FROM_AGE, DECLINE_YEARS, returnKeys, spendingDeclines, type Assumptions, type Holding } from './model.ts'
 
 // Monte Carlo freedom plan. Every amount is in today's dollars: returns are made real by
 // dividing out inflation, so spending stays constant in purchasing power.
@@ -74,8 +74,14 @@ export function makePlan(a: Assumptions, holdings: Holding[], startYear: number)
     return f
   }
 
-  // The largest constant yearly spend W that never runs out in this run. At the start of
-  // retirement year k: B + Σ f_i / G_i ≥ W · Σ 1 / G_i, where G_i is growth since stopping.
+  // Spending in year i as a share of spending when you stop: it holds until 70 (or the stop age, if
+  // later), falls `drop` a year for DECLINE_YEARS, then holds.
+  const drop = (spendingDeclines[a.spendingDecline ?? 0]?.pct ?? 0) / 100
+  const spendShare = (i: number, stop: number) =>
+    Math.pow(1 - drop, Math.min(DECLINE_YEARS, Math.max(0, i - Math.max(DECLINE_FROM_AGE - a.currentAge, stop))))
+
+  // The largest yearly spend W at stopping, following spendShare after, that never runs out in this run.
+  // At the start of retirement year k: B + Σ f_i / G_i ≥ W · Σ s_i / G_i, where G_i is growth since stopping.
   const maxSpend = (stop: number) => {
     const out = new Float64Array(RUNS)
     const atStop = new Float64Array(RUNS)
@@ -89,7 +95,7 @@ export function makePlan(a: Assumptions, holdings: Holding[], startYear: number)
       let min = Infinity
       for (let i = stop; i < years; i++) {
         flows += flow(i, stop) / growth
-        annuity += 1 / growth
+        annuity += spendShare(i, stop) / growth
         min = Math.min(min, (b + flows) / annuity)
         growth *= 1 + ret(run, i)
       }
@@ -120,7 +126,7 @@ export function makePlan(a: Assumptions, holdings: Holding[], startYear: number)
       let b = netWorth
       cols[0][run] = b
       for (let i = 0; i < years; i++) {
-        b = Math.max(0, b + flow(i, stop) - (i >= stop ? spend : 0)) * (1 + ret(run, i))
+        b = Math.max(0, b + flow(i, stop) - (i >= stop ? spend * spendShare(i, stop) : 0)) * (1 + ret(run, i))
         cols[i + 1][run] = b
       }
     }
@@ -149,6 +155,10 @@ export function makePlan(a: Assumptions, holdings: Holding[], startYear: number)
     /** Share of markets in which spendByStop[stop] lasts. */
     lastsAt,
     bands,
+    /** Spending at `age` if you stop after `stop` years, as a share of spending when you stop. */
+    spendShareAt: (stop: number, age: number) => spendShare(age - a.currentAge, stop),
+    /** Age spending stops falling, if you stop after `stop` years. */
+    declineEndsAt: (stop: number) => Math.max(DECLINE_FROM_AGE, a.currentAge + stop) + DECLINE_YEARS,
   }
 }
 

@@ -5,6 +5,9 @@ import {
   kindInfo,
   formatSlider,
   planSliders,
+  DECLINE_FROM_AGE,
+  DECLINE_YEARS,
+  spendingDeclines,
   sliderValue,
   START_YEAR,
   today,
@@ -158,7 +161,12 @@ export function overview(s: State = getState()) {
     planDetail(s.assumptions, s.holdings),
     '',
     '## Plan assumptions (change with update_plan)',
-    `All plan amounts are in today's dollars. Returns are simulated 400 times. Each portfolio type grows at its own yearly return, keeping today's mix: ${returnMix(s.assumptions, s.holdings)
+    `All plan amounts are in today's dollars. Returns are simulated 400 times. Spending amounts are what you spend in the year you stop; ${
+      s.assumptions.spendingDecline
+        ? `after that, spending holds until ${DECLINE_FROM_AGE} (or the stop age, if later), then falls ${spendingDeclines[s.assumptions.spendingDecline].pct}% a year for ${DECLINE_YEARS} years (spendingDecline), then holds.`
+        : 'spending stays the same every year (spendingDecline is 0).'
+    }`,
+    `Each portfolio type grows at its own yearly return, keeping today's mix: ${returnMix(s.assumptions, s.holdings)
       .map((m) => `${m.kind} ${Math.round(m.sharePct)}% of the portfolio at ${+m.returnPct.toFixed(2)}%${m.kind === 'Cash' ? " (its holdings' weighted APY, no swings)" : m.custom ? '' : ' (returnPct)'}`)
       .join('; ')}. Everything except cash swings by volatilityPct a year.`,
     assumptionsText(s.assumptions),
