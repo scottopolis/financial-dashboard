@@ -155,10 +155,6 @@ export function makePlan(a: Assumptions, holdings: Holding[], startYear: number)
     /** Share of markets in which spendByStop[stop] lasts. */
     lastsAt,
     bands,
-    /** Spending at `age` if you stop after `stop` years, as a share of spending when you stop. */
-    spendShareAt: (stop: number, age: number) => spendShare(age - a.currentAge, stop),
-    /** Age spending stops falling, if you stop after `stop` years. */
-    declineEndsAt: (stop: number) => Math.max(DECLINE_FROM_AGE, a.currentAge + stop) + DECLINE_YEARS,
   }
 }
 
